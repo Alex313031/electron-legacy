@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.0"
+SCRIPTVER="1.1.0"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -28,6 +28,9 @@ ELECTRON_PATH="$SRC_PATH/electron"
 # Patch series to apply on top of the checkout
 PATCHES_PATH="$HERE/patches"
 
+# GN args per build config: <release|debug>_<x64|x86>.gn
+ARGS_PATH="$HERE/assets/args"
+
 # Log file from this script (NOT Ninja/Siso log files)
 LOG_FILE="$ROOT_PATH/build.log"
 
@@ -41,6 +44,10 @@ ELECTRON_URL="https://github.com/electron/electron.git"
 DEPOT_TOOLS_URL="https://chromium.googlesource.com/chromium/tools/depot_tools.git"
 # Where depot_tools lives if it isn't already on $PATH.
 DEPOT_TOOLS_PATH="${DEPOT_TOOLS_PATH:-$HOME/depot_tools}"
+
+# Max parallel git operations during gclient sync. gclient's own default is
+# max(8, CPUs), far too many on big build servers. Override with SYNC_JOBS=N.
+MAX_SYNC_JOBS=8
 
 # Electron's gclient hooks run yarn under Node.js; this is its documented minimum.
 MIN_NODE_VERSION="22.12.0"
@@ -117,6 +124,7 @@ Options:
 
 Environment:
   ROOT_PATH          Where .gclient and src/ go (default: $HERE)
+  SYNC_JOBS          Parallel git operations for gclient sync (default: CPUs, max $MAX_SYNC_JOBS)
   DEPOT_TOOLS_PATH   depot_tools location if not on PATH (default: \$HOME/depot_tools)
   vs2022_install     Visual Studio path, if not installed in the default location
   WINDOWSSDKDIR      Windows SDK path, if not installed in the default location
@@ -383,6 +391,13 @@ fetch_sources() {
     error_exit "ROOT_PATH '$ROOT_PATH' contains spaces, which Chromium's build doesn't support"
   fi
 
+  # Electron's mtime cache keeps the timestamps of files its patches touch
+  # across re-syncs, so they don't all rebuild. A first sync has nothing to
+  # keep, and the cache's pre-sync hook would just print "Skipping
+  # non-existent file" for every one of them.
+  local use_mtime_cache=False
+  [ -d "$ELECTRON_PATH" ] && use_mtime_cache=True
+
   # Written by us (instead of `gclient config`) so it can carry target_os,
   # which cross-building from Linux will need.
   cat > "$ROOT_PATH/.gclient" <<EOF
@@ -399,6 +414,7 @@ solutions = [
       "checkout_configuration": "small",
       # node_modules for post-processing V8 coverage reports.
       "checkout_js_coverage_modules": False,
+      "use_mtime_cache": $use_mtime_cache,
       # Download PGO profiles
       "checkout_pgo_profiles": True
     },
@@ -420,6 +436,14 @@ EOF
   else
     flags+=(--with_branch_heads --with_tags)
   fi
+
+  # One job per CPU, capped at MAX_SYNC_JOBS (SYNC_JOBS overrides).
+  local cpus jobs
+  cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)
+  jobs=$(( cpus < MAX_SYNC_JOBS ? cpus : MAX_SYNC_JOBS ))
+  jobs="${SYNC_JOBS:-$jobs}"
+  [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || error_exit "Invalid SYNC_JOBS '$jobs'"
+  flags+=(--jobs "$jobs")
 
   cd "$ROOT_PATH" || error_exit "Unable to enter $ROOT_PATH"
   VERBOSE=1 execute "Syncing Electron v$ELECTRON_VERSION sources into $SRC_PATH (this takes a long time)" \
@@ -517,14 +541,20 @@ version_arg() {
 }
 
 gen_out() {
-  # Set args and gn gen out based on supplied flags.
+  # Set args and gn gen out based on supplied flags. The args come from
+  # assets/args/<config>_<arch>.gn, copied into args.gn because GN can't import
+  # files from outside src/. Lines the file doesn't set itself are appended.
+  local config=release
+  [ "$IS_DEBUG" = true ] && config=debug
+  local name="${config}_${ARCH}.gn"
+  local file="$ARGS_PATH/$name"
+  [ -f "$file" ] || error_exit "No GN args file for this build: $file"
+
   local args=()
-  if [ "$IS_DEBUG" = true ]; then
-    args+=('import("//electron/build/args/testing.gn")' 'is_debug = true' 'symbol_level = 2')
-  else
-    args+=('import("//electron/build/args/release.gn")')
-  fi
-  args+=('target_os = "win"' "target_cpu = \"$ARCH\"" "$(version_arg)")
+  mapfile -t args < <(tr -d '\r' < "$file")
+  args=("# From assets/args/$name" "${args[@]}" "" "# Added by $SCRIPTNAME")
+  grep -Eq '^[[:space:]]*target_os[[:space:]]*=' "$file" || args+=('target_os = "win"')
+  grep -Eq '^[[:space:]]*override_electron_version[[:space:]]*=' "$file" || args+=("$(version_arg)")
   write_args "$(out_dir)" "${args[@]}"
 }
 
