@@ -1,0 +1,40 @@
+Title: Lower Node's Windows version gate to Windows 7
+Origin: Alex313031/nodejs-win7 (win7 branch), rebased onto node v24.20.0
+
+Only reached when building Node on its own (the standalone launcher and the
+MSI installer); Electron supplies its own entry point and does not compile
+node_main.cc. NODE_SKIP_PLATFORM_CHECK still works, as the message says.
+
+diff --git a/src/node_main.cc b/src/node_main.cc
+--- a/src/node_main.cc
++++ b/src/node_main.cc
+@@ -32,15 +32,12 @@
+ #define SKIP_CHECK_STRLEN (sizeof(SKIP_CHECK_VALUE) - 1)
+
+ int wmain(int argc, wchar_t* wargv[]) {
+-  // Windows Server 2012 (not R2) is supported until 10/10/2023, so we allow it
+-  // to run in the experimental support tier.
+   char buf[SKIP_CHECK_STRLEN + 1];
+-  if (!IsWindows10OrGreater() &&
++  if (!IsWindows7OrGreater() &&
+       (GetEnvironmentVariableA(SKIP_CHECK_VAR, buf, sizeof(buf)) !=
+            SKIP_CHECK_STRLEN ||
+        strncmp(buf, SKIP_CHECK_VALUE, SKIP_CHECK_STRLEN) != 0)) {
+     fprintf(stderr,
+-            "Node.js is only supported on Windows 10, Windows "
+-            "Server 2016, or higher.\n"
++            "Node.js is only supported on Windows 7 or higher.\n"
+             "Setting the " SKIP_CHECK_VAR " environment variable "
+             "to 1 skips this\ncheck, but Node.js might not execute "
+diff --git a/tools/msvs/msi/nodemsi/product.wxs b/tools/msvs/msi/nodemsi/product.wxs
+--- a/tools/msvs/msi/nodemsi/product.wxs
++++ b/tools/msvs/msi/nodemsi/product.wxs
+@@ -19,7 +19,7 @@
+            InstallerVersion="200"
+            Compressed="yes">
+
+-    <Launch Condition="Installed OR (VersionNT &gt;= 603) OR (VersionNT &gt;= 602 AND MsiNTProductType &lt;&gt; 1)" Message="This application is only supported on Windows 8.1, Windows Server 2012 R2, or higher." />
++    <Launch Condition="Installed OR (VersionNT &gt;= 601)" Message="This application is only supported on Windows 7 or higher." />
+
+     <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
+

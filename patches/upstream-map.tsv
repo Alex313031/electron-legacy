@@ -341,3 +341,4 @@ electron	02-load-getcurrentpackagefullname-dynamically.patch	e3kskoy7wqk/Electro
 node	01-fix-crash-caused-by-gethostnamew-on-windows-7.patch	e3kskoy7wqk/Electron-for-windows-7 v44.2.0 third_party/electron_node/fix_crash_caused_by_gethostnamew_on_windows_7.patch			Fix crash caused by GetHostNameW on Windows 7
 node	02-fix-crash-in-uv-get-process-title-on-windows-7.patch	e3kskoy7wqk/Electron-for-windows-7 v44.2.0 third_party/electron_node/fix_crash_uv_get_process_title_on_windows_7.diff			Fix crash in uv_get_process_title on Windows 7
 node	03-fall-back-to-getsystemtimeasfiletime-when-the-precise.patch	e3kskoy7wqk/Electron-for-windows-7 v44.2.0 third_party/electron_node/FR_add_real-time_clock_version_of_uv_hrtime()_#1674.diff			Fall back to GetSystemTimeAsFileTime when the precise variant is missing
+node	04-node-version-check-win7.patch	Alex313031/nodejs-win7 (win7 branch), rebased onto node v24.20.0			Lower Node's Windows version gate to Windows 7
