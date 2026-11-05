@@ -1,0 +1,24 @@
+import("//electron/build/args/all.gn")
+
+target_cpu = "x64"
+
+is_official_build = true
+is_debug = false
+dcheck_always_on = false
+is_component_build = false
+is_component_ffmpeg = true
+ffmpeg_branding = "Chrome"
+proprietary_codecs = true
+rtc_use_h264 = true
+enable_ffmpeg_video_decoders = true
+enable_hevc_parser_and_hw_decoder = true
+symbol_level = 0
+enable_dsyms = false
+use_thin_lto = true
+thin_lto_enable_optimizations = true
+
+visual_studio_version = "2022"
+treat_warnings_as_errors = false
+
+v8_builtins_profiling_log_file =
+    "//electron/build/pgo_profiles/electron-v8-builtins.profile"
