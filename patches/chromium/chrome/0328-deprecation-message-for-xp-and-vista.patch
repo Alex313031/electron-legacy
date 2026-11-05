@@ -1,0 +1,16 @@
+Title: Deprecation message for XP and Vista
+Upstream-Commit: e89f8dfc6c46b79a391bfd6a0a8e0223eed01807 (2015/11/12 11:21:05) Deprecation message for XP and Vista
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/e89f8dfc6c46b79a391bfd6a0a8e0223eed01807.diff
+
+diff --git a/chrome/browser/obsolete_system/obsolete_system_win.cc b/chrome/browser/obsolete_system/obsolete_system_win.cc
+--- a/chrome/browser/obsolete_system/obsolete_system_win.cc
++++ b/chrome/browser/obsolete_system/obsolete_system_win.cc
+@@ -15,7 +15,7 @@
+ }
+ 
+ bool IsObsoleteOsVersion() {
+-  return GetRealOSVersion() < base::win::Version::WIN10;
++  return false;
+ }
+ 
+ }  // namespace

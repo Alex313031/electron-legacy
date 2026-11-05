@@ -1,0 +1,17 @@
+Title: Remove base::win::GetNonClientMetrics
+Upstream-Commit: 997ed997e3338bc2cde828b9d3617aeeba1f586f (2019/10/16 4:17:00) Remove base::win::GetNonClientMetrics
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/997ed997e3338bc2cde828b9d3617aeeba1f586f.diff
+
+diff --git a/ui/gfx/system_fonts_win.cc b/ui/gfx/system_fonts_win.cc
+index 4cb0435402510..5454e39befe70 100644
+--- a/ui/gfx/system_fonts_win.cc
++++ b/ui/gfx/system_fonts_win.cc
+@@ -137,7 +138,7 @@ class SystemFonts {
+     TRACE_EVENT0("fonts", "gfx::SystemFonts::Initialize");
+ 
+     NONCLIENTMETRICS metrics = {};
+-    metrics.cbSize = sizeof(metrics);
++    metrics.cbSize = sizeof(metrics) - sizeof(metrics.iPaddedBorderWidth);
+     const bool success = !!SystemParametersInfo(SPI_GETNONCLIENTMETRICS,
+                                                 metrics.cbSize, &metrics, 0);
+     DCHECK(success);

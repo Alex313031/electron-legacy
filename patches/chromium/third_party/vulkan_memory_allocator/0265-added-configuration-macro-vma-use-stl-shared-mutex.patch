@@ -1,0 +1,17 @@
+Title: Added configuration macro VMA_USE_STL_SHARED_MUTEX.
+Upstream-Commit: de9181b2ba8cfc5a0c7e29d19399a92b829706b3 (2018/10/10 22:26:26) Added configuration macro VMA_USE_STL_SHARED_MUTEX.
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/de9181b2ba8cfc5a0c7e29d19399a92b829706b3.diff
+
+diff --git a/third_party/vulkan_memory_allocator/include/vk_mem_alloc.h b/third_party/vulkan_memory_allocator/include/vk_mem_alloc.h
+index a09dd96..4e860db 100644
+--- a/third_party/vulkan_memory_allocator/include/vk_mem_alloc.h
++++ b/third_party/vulkan_memory_allocator/include/vk_mem_alloc.h
+@@ -4074,7 +4074,7 @@ void *aligned_alloc(size_t alignment, size_t size)
+             std::shared_mutex m_Mutex;
+         };
+         #define VMA_RW_MUTEX VmaRWMutex
+-    #elif defined(_WIN32) && defined(WINVER) && WINVER >= 0x0600
++    #elif defined(_WIN32) && defined(WINVER) && 0
+         // Use SRWLOCK from WinAPI.
+         // Minimum supported client = Windows Vista, server = Windows Server 2008.
+         class VmaRWMutex

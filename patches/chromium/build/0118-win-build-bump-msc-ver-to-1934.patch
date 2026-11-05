@@ -1,0 +1,17 @@
+Title: [win build] Bump _MSC_VER to 1934.
+Upstream-Commit: 7d3ad5c6af75407e3d1d9a1827a8628f1fd904b5 (2023/5/16 23:07:20) [win build] Bump _MSC_VER to 1934.
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/7d3ad5c6af75407e3d1d9a1827a8628f1fd904b5.diff
+
+diff --git a/build/config/win/BUILD.gn b/build/config/win/BUILD.gn
+index c51ad032acd3f..e7a194de59010 100644
+--- a/build/config/win/BUILD.gn
++++ b/build/config/win/BUILD.gn
+@@ -95,7 +95,7 @@ config("compiler") {
+     cflags += [ "/D__WRL_ENABLE_FUNCTION_STATICS__" ]
+ 
+     # Tell clang which version of MSVC to emulate.
+-    cflags += [ "-fmsc-version=1934" ]
++    cflags += [ "-fmsc-version=1916" ]
+ 
+     if (is_component_build) {
+       cflags += [

@@ -1,0 +1,23 @@
+Title: Enable kFallbackToSWIfGLES3NotSupported for windows
+Upstream-Commit: 6bd797bbdec087e124046e31037ca6417d5028ef (2026/6/12 6:41:49) Enable kFallbackToSWIfGLES3NotSupported for windows
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/6bd797bbdec087e124046e31037ca6417d5028ef.diff
+
+diff --git a/ui/gl/gl_features.cc b/ui/gl/gl_features.cc
+index d9dd7b4a44dda..44c67737837f6 100644
+--- a/ui/gl/gl_features.cc
++++ b/ui/gl/gl_features.cc
+@@ -115,7 +115,14 @@ BASE_FEATURE(kDefaultPassthroughCommandDecoder,
+ // Controls whether the GPU process falls back to software if GLES3 is not
+ // supported.
+ BASE_FEATURE(kFallbackToSWIfGLES3NotSupported,
++#if BUILDFLAG(IS_WIN)
++             // TODO(https://crbug.com/444049511): Currently disabled on
++             // Windows for D3D9 users that are still on ES 2. Enable once
++             // crbug.com/40874754 is fixed, deprecating D3D9 usage.
++             base::FEATURE_DISABLED_BY_DEFAULT);
++#else   // BUILDFLAG(IS_CHROMEOS)
+              base::FEATURE_ENABLED_BY_DEFAULT);
++#endif  // BUILDFLAG(IS_WIN)
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+ 
+ #if BUILDFLAG(IS_WIN)

@@ -1,0 +1,16 @@
+Title: win7dep: Remove WMI.Antivirus metrics
+Upstream-Commit: 0d90c70857828cf293ca3d7d432ff8ed2f82f5dc (2023/2/24 0:03:54) win7dep: Remove WMI.Antivirus metrics
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/0d90c70857828cf293ca3d7d432ff8ed2f82f5dc.diff
+
+diff --git a/tools/metrics/histograms/metadata/enterprise/histograms.xml b/tools/metrics/histograms/metadata/enterprise/histograms.xml
+index b8e0b7b95f9e1..fae60ef9ee1f5 100644
+--- a/tools/metrics/histograms/metadata/enterprise/histograms.xml
++++ b/tools/metrics/histograms/metadata/enterprise/histograms.xml
+@@ -2644,6 +2644,7 @@ chromium-metrics-reviews@google.com.
+     Captures the response parsing error rate whenever collecting {Signal}.
+   </summary>
+   <token key="Signal">
++    <variant name="WMI.AntiVirus" summary="AntiVirus info from WMI"/>
+     <variant name="WMI.Hotfixes" summary="Hotfixes info from WMI"/>
+     <variant name="WSC.AntiVirus" summary="AntiVirus info from WSC"/>
+   </token>

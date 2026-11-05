@@ -1,0 +1,24 @@
+Title: Add Heap corruption chrome URLs.
+Upstream-Commit: eb4a6ff50a1b18459d68ebbd066610cd483b6faa (2018/7/26 2:36:52) Add Heap corruption chrome URLs.
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/eb4a6ff50a1b18459d68ebbd066610cd483b6faa.diff
+
+diff --git a/base/debug/invalid_access_win.cc b/base/debug/invalid_access_win.cc
+index d6a96de167b28..a68c18ae4b54d 100644
+--- a/base/debug/invalid_access_win.cc
++++ b/base/debug/invalid_access_win.cc
+@@ -19,8 +19,13 @@ namespace {
+ void CreateSyntheticHeapCorruption() {
+   EXCEPTION_RECORD record = {};
+   record.ExceptionCode = STATUS_HEAP_CORRUPTION;
+-  RaiseFailFastException(&record, nullptr,
+-                         FAIL_FAST_GENERATE_EXCEPTION_ADDRESS);
++        HMODULE k32handle = GetModuleHandleW(L"kernelbase.dll");
++        auto pfnRaiseFailFastException =
++            (decltype(RaiseFailFastException)*)GetProcAddress(k32handle, "RaiseFailFastException");
++        if (pfnRaiseFailFastException)
++        {
++            pfnRaiseFailFastException(&record, nullptr, FAIL_FAST_GENERATE_EXCEPTION_ADDRESS);
++        }
+ }
+ 
+ }  // namespace

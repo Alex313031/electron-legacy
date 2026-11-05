@@ -1,0 +1,17 @@
+Title: Implement GetThreadCPUTimeNs based on QueryThreadCycleTime.
+Upstream-Commit: 093985eb1df49484f148dce0b0dba877136c6e90 (2023/11/25 4:42:58) Implement GetThreadCPUTimeNs based on QueryThreadCycleTime.
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/093985eb1df49484f148dce0b0dba877136c6e90.diff
+
+diff --git a/third_party/perfetto/src/base/time.cc b/third_party/perfetto/src/base/time.cc
+index 3ea2343084..f26bc01465 100644
+--- a/third_party/perfetto/src/base/time.cc
++++ b/third_party/perfetto/src/base/time.cc
+@@ -122,7 +122,7 @@ TimeNanos GetWallTimeNs() {
+ }
+ 
+ TimeNanos GetThreadCPUTimeNs() {
+-#if PERFETTO_BUILDFLAG(PERFETTO_ARCH_CPU_ARM64)
++#if 1
+   // QueryThreadCycleTime versus TSCTicksPerSecond doesn't have much relation to
+   // actual elapsed time on Windows on Arm, because QueryThreadCycleTime is
+   // backed by the actual number of CPU cycles executed, rather than a

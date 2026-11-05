@@ -1,0 +1,17 @@
+Title: Fix font-height off-by one due to rounding
+Upstream-Commit: d3045ebd7ab96e5b09d9b0ca7da1d2d4b7832d15 (2019/8/21 5:02:55) Fix font-height off-by one due to rounding
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/d3045ebd7ab96e5b09d9b0ca7da1d2d4b7832d15.diff
+
+diff --git a/skia/ext/font_utils.cc b/skia/ext/font_utils.cc
+index 6a7c33e9be101..5903fa0f27420 100644
+--- a/skia/ext/font_utils.cc
++++ b/skia/ext/font_utils.cc
+@@ -10,7 +10,7 @@
+   return SkFontMgr_New_Fuchsia(std::move(provider),
+                                SkFontScanner_Make_Fontations());
+ #elif BUILDFLAG(IS_WIN)
+-  return SkFontMgr_New_DirectWrite();
++  return SkFontMgr_New_GDI();
+ #elif defined(SK_FONTMGR_FREETYPE_EMPTY_AVAILABLE)
+   return SkFontMgr_New_Custom_Empty();
+ #else

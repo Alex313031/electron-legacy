@@ -1,0 +1,23 @@
+Title: Reland "windows startup: OVERRIDE_PREFETCH_PARAMETER on singleton"
+Upstream-Commit: 401d25e97aaa37f9e029b71db0b9aec5847a7d93 (2024/12/5 0:47:24) Reland "windows startup: OVERRIDE_PREFETCH_PARAMETER on singleton"
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/401d25e97aaa37f9e029b71db0b9aec5847a7d93.diff
+
+diff --git a/chrome/browser/chrome_process_singleton.cc b/chrome/browser/chrome_process_singleton.cc
+index 166dd7356abec..0ddbe0d8b9c42 100644
+--- a/chrome/browser/chrome_process_singleton.cc
++++ b/chrome/browser/chrome_process_singleton.cc
+@@ -92,9 +92,13 @@ void ChromeProcessSingleton::InitializeFeatures() {
+     // functionality of the browser. See crbug.com/380088804 for details. It has
+     // been seen that occasionally (in CQ), this call fails with
+     // ERROR_INTERNAL_ERROR.
++  static const auto set_process_information_fn =
++      reinterpret_cast<decltype(&::SetProcessInformation)>(::GetProcAddress(
++          ::GetModuleHandle(L"Kernel32.dll"), "SetProcessInformation"));
+     base::UmaHistogramSparse(
+         "Startup.PrefetchOverrideErrorCode",
+-        ::SetProcessInformation(::GetCurrentProcess(),
++        set_process_information_fn &&
++        set_process_information_fn(::GetCurrentProcess(),
+                                 ::ProcessOverrideSubsequentPrefetchParameter,
+                                 &prefetch_parameter, sizeof(prefetch_parameter))
+             ? ERROR_SUCCESS

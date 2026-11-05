@@ -1,0 +1,34 @@
+Title: Create base::SysInfo::NumberOfEfficientProcessors()
+Upstream-Commit: 833562ba069776d7a6bafcd250e4b75479775a88 (2022/12/9 12:07:02) Create base::SysInfo::NumberOfEfficientProcessors()
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/833562ba069776d7a6bafcd250e4b75479775a88.diff
+
+diff --git a/base/system/sys_info_win.cc b/base/system/sys_info_win.cc
+index 683ea13ccc5d1..2c8a3037f218b 100644
+--- a/base/system/sys_info_win.cc
++++ b/base/system/sys_info_win.cc
+@@ -40,14 +40,23 @@ std::vector<BYTE> GetCoreEfficiencyClasses() {
+   absl::InlinedVector<BYTE, kReservedSize> buffer;
+   buffer.resize(kReservedSize);
+   DWORD byte_length = kReservedSize;
+-  if (!GetLogicalProcessorInformationEx(
++    typedef BOOL (WINAPI *PFnGetLogicalProcessorInformationEx)(LOGICAL_PROCESSOR_RELATIONSHIP, PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, PDWORD);
++    PFnGetLogicalProcessorInformationEx pfnGetLogicalProcessorInformationEx
++        = (PFnGetLogicalProcessorInformationEx) GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
++                                                                "GetLogicalProcessorInformationEx");
++    if (pfnGetLogicalProcessorInformationEx == NULL)
++    {
++        return {};
++    }
++
++  if (!pfnGetLogicalProcessorInformationEx(
+           RelationProcessorCore,
+           reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
+               buffer.data()),
+           &byte_length)) {
+     DPCHECK(GetLastError() == ERROR_INSUFFICIENT_BUFFER);
+     buffer.resize(byte_length);
+-    if (!GetLogicalProcessorInformationEx(
++    if (!pfnGetLogicalProcessorInformationEx(
+             RelationProcessorCore,
+             reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
+                 buffer.data()),

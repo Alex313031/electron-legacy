@@ -1,0 +1,27 @@
+Title: [NewEV] Implement isRunning Binary Signal
+Upstream-Commit: e86dbe529c7f2b296f73be368da69954196f4c1a (2022/8/5 22:43:26) [NewEV] Implement isRunning Binary Signal
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/e86dbe529c7f2b296f73be368da69954196f4c1a.diff
+
+diff --git a/components/device_signals/core/common/win/platform_utils_win.cc b/components/device_signals/core/common/win/platform_utils_win.cc
+index c25fff49d8551..41fd5c1fb37db 100644
+--- a/components/device_signals/core/common/win/platform_utils_win.cc
++++ b/components/device_signals/core/common/win/platform_utils_win.cc
+@@ -5,6 +5,7 @@
+ #include "components/device_signals/core/common/platform_utils.h"
+ 
+ #include <windows.h>
++#include <psapi.h>
+ 
+ // SECURITY_WIN32 must be defined in order to get
+ // EXTENDED_NAME_FORMAT enumeration.
+@@ -20,8 +21,8 @@ absl::optional<base::FilePath> GetProcessExePath(base::ProcessId pid) {
+ 
+   DWORD path_len = MAX_PATH;
+   wchar_t path_string[MAX_PATH];
+-  if (!::QueryFullProcessImageName(process.Handle(), 0, path_string,
+-                                   &path_len)) {
++  if (!::GetModuleFileNameExW(process.Handle(), 0, path_string,
++                                   path_len)) {
+     return std::nullopt;
+   }
+ 

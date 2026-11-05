@@ -1,0 +1,34 @@
+# OS Stuff
+.DS_Store
+.eslintcache
+.directory
+Thumbs.db
+
+# MSVS Stuff
+*.vcxproj.user
+*.tlog
+*.vs/
+/.vs/
+/.idea/
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Source download dir
+/src/
+
+# Dist dir
+/dist/
+
+# gclient checkout state (build.sh uses this repo as the gclient root by default)
+/.gclient
+/.gclient_entries
+/.gclient_previous_custom_vars
+/.gclient_previous_sync_commits
+/.cipd/
+/_bad_scm/
+
+# build.sh log
+/build.log

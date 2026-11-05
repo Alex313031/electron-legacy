@@ -1,0 +1,29 @@
+Title: Switch to PSAPI_VERSION=2 to avoid having to load psapi.dll
+Upstream-Commit: 5dc8c450e4ac2c18d3abd6d75730ff6a35fc2ccc (2019/1/8 0:31:39) Switch to PSAPI_VERSION=2 to avoid having to load psapi.dll
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/5dc8c450e4ac2c18d3abd6d75730ff6a35fc2ccc.diff
+
+diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
+index 49d2e57e37e14..10f2fc8ad3a6e 100644
+--- a/build/config/BUILD.gn
++++ b/build/config/BUILD.gn
+@@ -221,6 +221,7 @@ config("default_libs") {
+       "odbc32.lib",
+       "odbccp32.lib",
+       "oleaut32.lib",
++      "psapi.lib",
+       "shell32.lib",
+       "shlwapi.lib",
+       "user32.lib",
+diff --git a/build/config/win/BUILD.gn b/build/config/win/BUILD.gn
+index 995638ad05565..805818ea0d132 100644
+--- a/build/config/win/BUILD.gn
++++ b/build/config/win/BUILD.gn
+@@ -247,7 +247,7 @@ config("runtime_library") {
+     "_ATL_NO_OPENGL",
+     "_WINDOWS",
+     "CERT_CHAIN_PARA_HAS_EXTRA_FIELDS",
+-    "PSAPI_VERSION=2",
++    "PSAPI_VERSION=1",
+     "WIN32",
+     "_SECURE_ATL",
+   ]

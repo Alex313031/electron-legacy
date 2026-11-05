@@ -1,0 +1,20 @@
+Title: [Windows] Add DACL lockdown and Random Restricted SID for GPU process.
+Upstream-Commit: a670e7a23fbebbb27b0ae63880987d7f59661f22 (2020/3/7 4:40:25) [Windows] Add DACL lockdown and Random Restricted SID for GPU process.
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/a670e7a23fbebbb27b0ae63880987d7f59661f22.diff
+
+diff --git a/sandbox/policy/win/sandbox_win.cc b/sandbox/policy/win/sandbox_win.cc
+index fc71a3cb8dc38..7e0fa0d1b456d 100644
+--- a/sandbox/policy/win/sandbox_win.cc
++++ b/sandbox/policy/win/sandbox_win.cc
+@@ -941,11 +941,6 @@ sandbox::ResultCode SandboxWin::StartSandboxedProcess(
+     return result;
+   }
+ 
+-  if (sandbox_type == Sandbox::kGpu) {
+-    config->SetLockdownDefaultDacl();
+-    config->AddRestrictingRandomSid();
+-  }
+-
+   CHECK_EQ(AddGenericConfig(config), SBOX_ALL_OK);
+ 
+   std::string appcontainer_id;

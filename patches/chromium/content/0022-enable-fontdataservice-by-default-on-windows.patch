@@ -1,0 +1,17 @@
+Title: Enable FontDataService by default on Windows
+Upstream-Commit: 8a88dd86918ef8f78b4fcfc58570b76f8cef83c3 (2026/1/8 3:20:23) Enable FontDataService by default on Windows
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/8a88dd86918ef8f78b4fcfc58570b76f8cef83c3.diff
+
+diff --git a/content/common/features.cc b/content/common/features.cc
+index 53920788528b4..7ece3c9b4ebc0 100644
+--- a/content/common/features.cc
++++ b/content/common/features.cc
+@@ -263,7 +263,7 @@ const base::FeatureParam<double>
+ // Windows and Linux (via separate features and experiments). See
+ // crbug.com/335680565.
+ #if BUILDFLAG(IS_WIN)
+-BASE_FEATURE(kFontDataServiceAllWebContents, base::FEATURE_ENABLED_BY_DEFAULT);
++BASE_FEATURE(kFontDataServiceAllWebContents, base::FEATURE_DISABLED_BY_DEFAULT);
+ const base::FeatureParam<FontDataServiceTypefaceType>::Option
+     font_data_service_typeface[] = {
+         {FontDataServiceTypefaceType::kDwrite, "DWrite"},

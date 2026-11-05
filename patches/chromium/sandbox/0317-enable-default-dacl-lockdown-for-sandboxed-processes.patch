@@ -1,0 +1,16 @@
+Title: Enable default DACL lockdown for sandboxed processes.
+Upstream-Commit: 329ab2d697eb8b8968a5451728a75a8e1d85532a (2016/4/2 2:14:17) Enable default DACL lockdown for sandboxed processes.
+Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/329ab2d697eb8b8968a5451728a75a8e1d85532a.diff
+
+diff --git a/sandbox/policy/win/sandbox_win.cc b/sandbox/policy/win/sandbox_win.cc
+index 8b6ce19..86b0dcb 100644
+--- a/sandbox/policy/win/sandbox_win.cc
++++ b/sandbox/policy/win/sandbox_win.cc
+@@ -414,7 +414,6 @@ bool AddPolicyForSandboxedProcess(sandbox::TargetPolicy* policy) {
+   if (result != SBOX_ALL_OK)
+     return result;
+ 
+-  config->SetLockdownDefaultDacl();
+   // Win8+ adds a device DeviceApi that we don't need.
+   if (base::win::GetVersion() >= base::win::Version::WIN8)
+   config->AddKernelObjectToClose(HandleToClose::kDeviceApi);
