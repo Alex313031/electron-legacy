@@ -23,9 +23,13 @@ while read -r p; do git -C src apply "$PWD/patches/chromium/$p"; done < patches/
 
 Chromium patches are grouped by the top-level directory they touch most
 (`base/`, `sandbox/`, `third_party/angle/`, ...). The `NNNN-` prefix is the
-global position in `series`, so order is visible from the file name alone.
-Most of these undo an upstream commit that dropped Windows 7/8 support, so
-`series` runs newest commit first.
+global position in `chromium/series`, so order is visible from the file name
+alone. Most of these undo an upstream commit that dropped Windows 7/8 support,
+so `series` runs newest commit first.
+
+`electron/`, `node/` and `other/` are flat and only a handful of patches each,
+so they use a two-digit `NN-` prefix numbered from 1 within their own `series`
+rather than Chromium's four.
 
 `third_party/rust-toolchain/*` patch the Rust toolchain that a gclient
 runhook downloads, so a later `gclient sync`/`runhooks` will wipe them. Re-apply after.

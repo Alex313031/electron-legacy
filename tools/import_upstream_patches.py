@@ -8,9 +8,9 @@ commit_message_<hash>.txt per diff. This script converts that into:
 
   <out>/chromium/series                       apply order, relative to chromium/
   <out>/chromium/<area>/NNNN-<slug>.patch     <area> = most-touched top-level dir
-  <out>/electron/series, NNNN-<slug>.patch    applied in src/electron
-  <out>/node/series, NNNN-<slug>.patch        applied in src/third_party/electron_node
-  <out>/other/series, NNNN-<slug>.patch       applied in src/, after chromium/ (our own
+  <out>/electron/series, NN-<slug>.patch      applied in src/electron
+  <out>/node/series, NN-<slug>.patch          applied in src/third_party/electron_node
+  <out>/other/series, NN-<slug>.patch         applied in src/, after chromium/ (our own
                                               additions: XP, cross-building, SIMD, ...)
   <out>/upstream-map.tsv                      provenance: new path -> original file/commit(s)
 
@@ -72,6 +72,12 @@ ORDER = {
 OTHER_PATCHES = [
     "disable-redraw-lock.patch",
 ]
+
+# Width of each series' numeric prefix. chromium/ numbers by global position
+# over 300+ patches, so it needs four digits; the others number from 1 within
+# a series short enough that two read better.
+SEQ_DIGITS = {"chromium": 4}
+DEFAULT_SEQ_DIGITS = 2
 
 PATCH_EXTS = (".diff", ".patch")
 MSG_LINE = re.compile(r"^(?P<title>.+?)\s{4,}(?P<date>\S.*?)\s{4,}(?P<hash>[0-9a-f]{7,40})$")
@@ -153,7 +159,8 @@ class Writer:
 
     def emit(self, series, seq, area, src, title, commits):
         rel_dir = Path(area) if area else Path()
-        name = f"{seq:04d}-{slugify(title)}.patch"
+        digits = SEQ_DIGITS.get(series, DEFAULT_SEQ_DIGITS)
+        name = f"{seq:0{digits}d}-{slugify(title)}.patch"
         rel = rel_dir / name
         dest = self.out / series / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
