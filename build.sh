@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.1.1"
+SCRIPTVER="1.1.2"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -116,6 +116,7 @@ Options:
   -p, --patch                 Only apply patches to already-downloaded sources, then exit; needs no arch.
                               Patches that are already applied are skipped.
   --sync                      Re-sync existing sources before building (same reset as -d).
+                              Without an arch it just syncs, then exits.
   --full-history              Download full git history (default: none, which is far
                               smaller and faster). Only affects repos not yet cloned.
   --gn-args "<args>"          Extra GN args, e.g. --gn-args 'symbol_level=0'. Repeatable.
@@ -273,6 +274,19 @@ parse_args() {
 
   if [ -n "$JOBS" ] && ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
     arg_error "Invalid job count '$JOBS'"
+  fi
+
+  # --package reads the arch's out dir and names its zips after the arch, so
+  # it is the one action that can't run without one. Checked here so it fails
+  # outright instead of being silently dropped by a sync-only run below.
+  if [ "$DO_PACKAGE" = true ] && [ -z "$ARCH" ]; then
+    arg_error "--package needs an architecture"
+  fi
+
+  # Syncing doesn't depend on the architecture, so --sync without one is a
+  # sync-only run rather than an error: the same thing -d does.
+  if [ "$DO_SYNC" = true ] && [ -z "$ARCH" ]; then
+    ONLY_DOWNLOAD=true
   fi
 }
 
