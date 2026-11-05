@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.1.0"
+SCRIPTVER="1.1.1"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -375,7 +375,7 @@ setup_toolchain() {
       # TODO: cross-build with a packaged VS toolchain, like Chromium:
       # DEPOT_TOOLS_WIN_TOOLCHAIN=1, DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL=<dir
       # with the toolchain .zip>, GYP_MSVS_HASH_<hash>=<zip hash>; .gclient
-      # already sets target_os = ["win"]. Needs Electron patches in other/.
+      # already carries "win" in target_os. Needs Electron patches in other/.
       error_exit "Building Windows binaries on Linux isn't supported yet (only -d and -p are); see TODO.md"
       ;;
     *)
@@ -397,6 +397,17 @@ fetch_sources() {
   # non-existent file" for every one of them.
   local use_mtime_cache=False
   [ -d "$ELECTRON_PATH" ] && use_mtime_cache=True
+
+  # target_os picks which of Chromium's per-platform DEPS get checked out. A
+  # Windows host wants only "win": adding "linux" sets checkout_linux, which
+  # pulls the Debian sysroots, the Wayland/mutter deps, and
+  # src/third_party/jdk/current. That last one is a Linux JDK whose CIPD
+  # package holds symlinks, and unpacking those on Windows fails with "A
+  # required privilege is not held by the client" unless the shell holds
+  # SeCreateSymbolicLinkPrivilege. Cross-building from Linux needs both, since
+  # the host tools it runs are built for linux.
+  local target_os='[ "win" ]'
+  [ "$HOST_OS" = linux ] && target_os='[ "linux", "win" ]'
 
   # Written by us (instead of `gclient config`) so it can carry target_os,
   # which cross-building from Linux will need.
@@ -420,7 +431,7 @@ solutions = [
     },
   },
 ]
-target_os = [ "linux", "win" ]
+target_os = $target_os
 EOF
 
   if [ -d "$SRC_PATH" ]; then
