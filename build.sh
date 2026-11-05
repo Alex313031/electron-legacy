@@ -468,6 +468,12 @@ EOF
     flags+=(--with_branch_heads --with_tags)
   fi
 
+  # gclient's --no-history path fetches with neither --progress nor a tty,
+  # unlike the `clone --progress` it uses otherwise, so git says nothing for
+  # the whole Chromium fetch and gclient's own stall detector cries wolf after
+  # five minutes. --verbose is what makes that fetch report progress.
+  [ "$VERBOSE" = 1 ] && flags+=(--verbose)
+
   # One job per CPU, capped at MAX_SYNC_JOBS (SYNC_JOBS overrides).
   local cpus jobs
   cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)
