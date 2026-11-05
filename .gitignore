@@ -25,8 +25,8 @@ Thumbs.db
 # gclient checkout state (build.sh uses this repo as the gclient root by default)
 /.gclient
 /.gclient_entries
-/.gclient_previous_custom_vars
-/.gclient_previous_sync_commits
+/.gclient_previous_*
+/_gclient*/
 /.cipd/
 /_bad_scm/
 
