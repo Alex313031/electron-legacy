@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.1.2"
+SCRIPTVER="1.1.3"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -62,6 +62,10 @@ export DEPOT_TOOLS_UPDATE=0
 # (Cross-building will instead point depot_tools at a packaged toolchain.)
 export DEPOT_TOOLS_WIN_TOOLCHAIN="${DEPOT_TOOLS_WIN_TOOLCHAIN:-0}"
 
+# Whatever SISO_LIMITS the caller set, kept so -j can be folded into it
+# without stacking up over the several builds a single run can do.
+SISO_LIMITS_BASE="${SISO_LIMITS:-}"
+
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) HOST_OS=windows ;;
   Linux*) HOST_OS=linux ;;
@@ -109,7 +113,8 @@ Options:
   --version                   Show script version.
   --deps                      Install depot_tools, set git config Chromium
                               needs, and check for Visual Studio and Node.js.
-  -j <count>, --jobs <count>  Override Siso job count. (default: let Siso decide)
+  -j <count>, --jobs <count>  Override the local job count. (default: let Siso decide)
+                              Applied via SISO_LIMITS, or -j for use_siso = false.
   --package                   Package built binaries into dist/ for distribution.
   -d, --download-sources      Only download sources, then exit; for making local modifications.
                               Discards any local changes in src/ (it resets to v$ELECTRON_VERSION).
@@ -126,6 +131,7 @@ Options:
 Environment:
   ROOT_PATH          Where .gclient and src/ go (default: $HERE)
   SYNC_JOBS          Parallel git operations for gclient sync (default: CPUs, max $MAX_SYNC_JOBS)
+  SISO_LIMITS        Extra Siso resource limits; -j appends local=<count> to it
   DEPOT_TOOLS_PATH   depot_tools location if not on PATH (default: \$HOME/depot_tools)
   vs2022_install     Visual Studio path, if not installed in the default location
   WINDOWSSDKDIR      Windows SDK path, if not installed in the default location
@@ -583,12 +589,48 @@ gen_out() {
   write_args "$(out_dir)" "${args[@]}"
 }
 
+uses_siso() {
+  # Siso is Chromium's default build driver, so only an explicit
+  # `use_siso = false` opts back into Ninja. Read from the generated args.gn
+  # rather than assets/args/, so --gn-args counts too.
+  local args="$SRC_PATH/$1/args.gn"
+  [ -f "$args" ] \
+    && grep -Eq '^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*false' "$args" \
+    && return 1
+  return 0
+}
+
 autoninja() {
-  local jobs=()
-  [ -n "$JOBS" ] && jobs=(-j "$JOBS")
+  # Args always carry -C <out dir>; find it to tell Siso and Ninja apart.
+  local out="" i n
+  for ((i = 1; i <= $#; i++)); do
+    if [ "${!i}" = -C ]; then
+      n=$((i + 1)); out="${!n}"; break
+    fi
+  done
+
+  local flags=()
+  # Both Ninja and Siso take -v to echo every command line.
+  [ "$VERBOSE" = 1 ] && flags+=(-v)
+
+  if [ -n "$JOBS" ]; then
+    if [ -n "$out" ] && uses_siso "$out"; then
+      # Siso deprecated -j, and autoninja rewrites it to -local_jobs, which
+      # older Siso builds don't have either. SISO_LIMITS is read by Siso
+      # itself and has outlived both flags; local= is the -local_jobs
+      # equivalent. It also sidesteps autoninja dropping -j altogether (with
+      # only a warning) whenever the count exceeds the CPU count.
+      export SISO_LIMITS="${SISO_LIMITS_BASE:+$SISO_LIMITS_BASE,}local=$JOBS"
+      log "${CYA} Limiting Siso to %s local jobs (SISO_LIMITS=%s)${c0}\n" \
+          "$JOBS" "$SISO_LIMITS"
+    else
+      flags+=(-j "$JOBS")
+    fi
+  fi
+
   cd "$SRC_PATH" || error_exit "Unable to enter $SRC_PATH"
   VERBOSE=1 execute "Building $* (this takes a long time)" "Build failed" \
-      dt autoninja "${jobs[@]}" "$@"
+      dt autoninja "${flags[@]}" "$@"
 }
 
 build_electron() {
