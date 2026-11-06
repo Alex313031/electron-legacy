@@ -600,9 +600,7 @@ solutions = [
       "checkout_configuration": "small",
       # node_modules for post-processing V8 coverage reports.
       "checkout_js_coverage_modules": False,
-      "use_mtime_cache": $use_mtime_cache,
-      # Download PGO profiles
-      "checkout_pgo_profiles": True
+      "use_mtime_cache": $use_mtime_cache
     },
   },
 ]

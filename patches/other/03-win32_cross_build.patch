@@ -76,6 +76,27 @@ error when it is not:
                                  the stub names a type that does not exist. Now
                                  an #elif defined(V8_OS_WIN).
 
+  device/bluetooth/bluetooth_adapter_factory.cc
+                                 chromium/device/0187 -- replaced upstream's
+                                 compile-time platform list for
+                                 kBluetoothSupportedByPlatform with an
+                                 unconditional base::win::GetVersion() >= WIN10
+                                 check, which neither compiles nor links off
+                                 Windows. The Win10 gate is now under
+                                 BUILDFLAG(IS_WIN) with upstream's list kept
+                                 for the other platforms.
+
+  third_party/blink/.../font_cache.cc
+                                 chromium/third_party/blink/0309 replaced
+                                 upstream's `FontCache::FontCache() = default`
+                                 with a body touching s_useSubpixelPositioning,
+                                 and 0311 extended it to s_useDirectWrite --
+                                 both statics are declared and defined under
+                                 BUILDFLAG(IS_WIN), the constructor body was
+                                 not. Guarded to match. 0311 also left an empty
+                                 `if (!s_useDirectWrite) {}` behind where the
+                                 GDI branch used to be; removed.
+
 It also fixes one Electron target that cannot work in a cross build at all:
 mksnapshot_checksum_gen hashes the v8 context snapshot, but Chromium disables
 that snapshot for Windows and macOS cross builds (building Blink twice is slow,
@@ -619,3 +640,53 @@ index 70d5b3d..8ff095b 100644
  void Isolate::SetFilterETWSessionByURL2Callback(
      FilterETWSessionByURL2Callback callback) {
  }
+diff --git a/device/bluetooth/bluetooth_adapter_factory.cc b/device/bluetooth/bluetooth_adapter_factory.cc
+index b617352..7247735 100644
+--- a/device/bluetooth/bluetooth_adapter_factory.cc
++++ b/device/bluetooth/bluetooth_adapter_factory.cc
+@@ -42,10 +42,18 @@ BluetoothAdapterFactory* BluetoothAdapterFactory::Get() {
+ 
+ static const bool kBluetoothSupportedByPlatform =
+ #if !defined(NO_PLATFORM_BLUETOOTH)
+-  // Windows 8 supports Low Energy GATT operations but it does not support
+-  // scanning, initiating connections and GATT Server. To keep the API
+-  // consistent we consider Windows 8 as lacking Low Energy support.
+-  base::win::GetVersion() >= base::win::Version::WIN10;
++#if BUILDFLAG(IS_WIN)
++    // Windows 8 supports Low Energy GATT operations but it does not support
++    // scanning, initiating connections and GATT Server. To keep the API
++    // consistent we consider Windows 8 as lacking Low Energy support.
++    // base::win::GetVersion() is Windows-only (win/windows_version.cc is
++    // inside if (is_win) in base/BUILD.gn), so the other platforms keep
++    // upstream's compile-time list below.
++    base::win::GetVersion() >= base::win::Version::WIN10;
++#else
++    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
++    BUILDFLAG(IS_APPLE);
++#endif  // BUILDFLAG(IS_WIN)
+ #else
+     false;
+ #endif
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index fe67852..d940eba 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -126,10 +126,14 @@ FontCache& FontCache::Get() {
+ }
+ 
+ FontCache::FontCache() {
+-    if (!s_useDirectWrite) {
+-    }
+-    // Subpixel text positioning is only supported by the DirectWrite backend (not GDI).
+-    s_useSubpixelPositioning = s_useDirectWrite;
++#if BUILDFLAG(IS_WIN)
++  // Both statics are declared and defined under BUILDFLAG(IS_WIN), so this
++  // body has to be too -- otherwise building blink for a non-Windows host, as
++  // a Linux-hosted cross build does, fails on the undeclared identifiers.
++  // Subpixel text positioning is only supported by the DirectWrite backend
++  // (not GDI).
++  s_useSubpixelPositioning = s_useDirectWrite;
++#endif
+ }
+ 
+ FontCache::~FontCache() = default;
