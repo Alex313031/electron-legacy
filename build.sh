@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.1"
+SCRIPTVER="1.2.2"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -56,11 +56,27 @@ MAX_SYNC_JOBS=8
 # Electron's gclient hooks run yarn under Node.js; this is its documented minimum.
 MIN_NODE_VERSION="22.12.0"
 
+# Chromium's build scripts use syntax that needs this (PEP 604 "X | Y" in
+# evaluated annotations is 3.10+); depot_tools ships 3.11, so prefer that over
+# whatever Python the host happens to have.
+MIN_PYTHON_VERSION="3.11"
+
 # Controls minimum Windows target, (unused currently)
 WIN32_WINNT="0x0600"
 
 # Don't auto update depot_tools
 export DEPOT_TOOLS_UPDATE=0
+
+# Parts of the build run Go toolchains they ship themselves -- dawn's source
+# generator uses third_party/dawn/tools/golang/<platform>/bin/go. GOROOT in the
+# environment overrides the GOROOT that binary was built with, so it ends up
+# running its own `go` against another installation's standard library and
+# tools, and fails with e.g.
+#   compile: version "go1.26.4" does not match go tool version "go1.25.0"
+# Unset both so each bundled toolchain uses its own, and module/build caches
+# land in the default per-user location rather than a GOPATH shared with
+# whatever Go the host has installed.
+unset GOROOT GOPATH
 
 # Custom Ninja status line.
 export NINJA_SUMMARIZE_BUILD=1
@@ -362,6 +378,21 @@ check_node() {
     || error_exit "Node.js $v is too old, Electron needs >= $MIN_NODE_VERSION"
 }
 
+check_python() {
+  # Checks the Python the build will actually run, which is not necessarily the
+  # one this shell finds: on Windows depot_tools ships python3.bat, and Git
+  # Bash won't resolve a .bat for the bare name "python3", so `command -v
+  # python3` walks past depot_tools to any system Python. gn does look for both
+  # python3.exe and python3.bat (see src/.gn), so with depot_tools first on
+  # PATH -- which clone_depot_tools now guarantees -- gn picks depot_tools'.
+  # py() resolves the same way, so ask it.
+  local v
+  v=$(py -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) \
+    || error_exit "Unable to run python3; depot_tools ships one, run '$SCRIPTNAME --deps'"
+  version_ge "$v" "$MIN_PYTHON_VERSION" \
+    || error_exit "python3 is $v, Chromium's build scripts need >= $MIN_PYTHON_VERSION; depot_tools ships one, so check that $DEPOT_TOOLS_PATH comes first on PATH"
+}
+
 find_visual_studio() {
   # Prints the Visual Studio install path, if one with the C++ tools is found.
   if [ -n "${vs2022_install:-}" ]; then
@@ -384,15 +415,22 @@ clone_depot_tools() {
   if found=$(command -v gclient 2>/dev/null); then
     DEPOT_TOOLS_PATH=$(dirname "$found")
     log "${GRE} Using depot_tools from %s${c0}\n" "$DEPOT_TOOLS_PATH"
-    return 0
-  fi
-  if [ ! -d "$DEPOT_TOOLS_PATH/.git" ]; then
-    if [ "$DO_DEPS" != true ]; then
-      error_exit "depot_tools not found on PATH or in $DEPOT_TOOLS_PATH, run '$SCRIPTNAME --deps' first"
+  else
+    if [ ! -d "$DEPOT_TOOLS_PATH/.git" ]; then
+      if [ "$DO_DEPS" != true ]; then
+        error_exit "depot_tools not found on PATH or in $DEPOT_TOOLS_PATH, run '$SCRIPTNAME --deps' first"
+      fi
+      execute "Cloning depot_tools into $DEPOT_TOOLS_PATH" "Unable to clone depot_tools" \
+          git clone "$DEPOT_TOOLS_URL" "$DEPOT_TOOLS_PATH"
     fi
-    execute "Cloning depot_tools into $DEPOT_TOOLS_PATH" "Unable to clone depot_tools" \
-        git clone "$DEPOT_TOOLS_URL" "$DEPOT_TOOLS_PATH"
   fi
+  # Always first, even when it was already on PATH: src/.gn sets
+  # script_executable = "python3", which gn resolves from PATH at `gn gen` time
+  # and bakes into build.ninja as an absolute path. Another Python earlier on
+  # PATH (a system C:\Python39, say) then runs every action in the build, and
+  # Chromium's scripts need the Python depot_tools ships -- e.g.
+  # tools/metrics/histograms/extract_histograms.py annotates with PEP 604
+  # "X | Y" unions, which are evaluated at import and need 3.10+.
   export PATH="$DEPOT_TOOLS_PATH:$PATH"
   if [ "$HOST_OS" = windows ] && [ ! -e "$DEPOT_TOOLS_PATH/python3.bat" ]; then
     # First run of a depot_tools command on Windows downloads its Python & Git.
@@ -941,6 +979,7 @@ main() {
   [ -n "$ARCH" ] || arg_error "No architecture given"
   setup_toolchain
   clone_depot_tools
+  check_python
 
   if [ "$DO_SYNC" = true ] || [ ! -d "$ELECTRON_PATH/.git" ]; then
     fetch_sources
