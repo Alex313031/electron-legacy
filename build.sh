@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.2"
+SCRIPTVER="1.2.3"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -146,7 +146,7 @@ Options:
   --version                   Show script version.
   --deps                      Install depot_tools, set git config Chromium
                               needs, and check for Visual Studio and Node.js.
-  -j <count>, --jobs <count>  Override the local job count. (default: let Siso decide)
+  -j <count>, --jobs <count>  Local job count (default: one per CPU)
                               Applied via SISO_LIMITS, or -j for use_siso = false.
   --package                   Package built binaries into dist/ for distribution.
   -d, --download-sources      Only download sources, then exit; for making local modifications.
@@ -305,6 +305,10 @@ gn() {
   fi
 }
 
+cpu_count() {
+  printf '%s\n' "$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)"
+}
+
 version_ge() {
   # True if version $1 >= $2.
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
@@ -343,6 +347,9 @@ parse_args() {
   if [ -n "$JOBS" ] && ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
     arg_error "Invalid job count '$JOBS'"
   fi
+  # Always set, so the build step can report it and autoninja never has to
+  # decide between a count and the build tool's own default.
+  JOBS="${JOBS:-$(cpu_count)}"
 
   # --package reads the arch's out dir and names its zips after the arch, so
   # it is the one action that can't run without one. Checked here so it fails
@@ -626,7 +633,7 @@ EOF
 
   # One job per CPU, capped at MAX_SYNC_JOBS (SYNC_JOBS overrides).
   local cpus jobs
-  cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)
+  cpus=$(cpu_count)
   jobs=$(( cpus < MAX_SYNC_JOBS ? cpus : MAX_SYNC_JOBS ))
   jobs="${SYNC_JOBS:-$jobs}"
   [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || error_exit "Invalid SYNC_JOBS '$jobs'"
@@ -807,19 +814,18 @@ autoninja() {
   # Both Ninja and Siso take -v to echo every command line.
   [ "$VERBOSE" = 1 ] && flags+=(-v)
 
-  if [ -n "$JOBS" ]; then
-    if [ -n "$out" ] && uses_siso "$out"; then
-      # Siso deprecated -j, and autoninja rewrites it to -local_jobs, which
-      # older Siso builds don't have either. SISO_LIMITS is read by Siso
-      # itself and has outlived both flags; local= is the -local_jobs
-      # equivalent. It also sidesteps autoninja dropping -j altogether (with
-      # only a warning) whenever the count exceeds the CPU count.
-      export SISO_LIMITS="${SISO_LIMITS_BASE:+$SISO_LIMITS_BASE,}local=$JOBS"
-      log "${CYA} Limiting Siso to %s local jobs (SISO_LIMITS=%s)${c0}\n" \
-          "$JOBS" "$SISO_LIMITS"
-    else
-      flags+=(-j "$JOBS")
-    fi
+  # JOBS is always set by parse_args, defaulting to the CPU count.
+  if [ -n "$out" ] && uses_siso "$out"; then
+    # Siso deprecated -j, and autoninja rewrites it to -local_jobs, which
+    # older Siso builds don't have either. SISO_LIMITS is read by Siso
+    # itself and has outlived both flags; local= is the -local_jobs
+    # equivalent. It also sidesteps autoninja dropping -j altogether (with
+    # only a warning) whenever the count exceeds the CPU count.
+    export SISO_LIMITS="${SISO_LIMITS_BASE:+$SISO_LIMITS_BASE,}local=$JOBS"
+    log "${CYA} Limiting Siso to %s local jobs (SISO_LIMITS=%s)${c0}\n" \
+        "$JOBS" "$SISO_LIMITS"
+  else
+    flags+=(-j "$JOBS")
   fi
 
   cd "$SRC_PATH" || error_exit "Unable to enter $SRC_PATH"
@@ -846,6 +852,9 @@ build_ffmpeg() {
 
 build_electron() {
   # Build it!
+  local config=Release
+  [ "$IS_DEBUG" = true ] && config=Debug
+  log "${CYA} Building Electron (%s) for %s using %s jobs${c0}\n" "$config" "$ARCH" "$JOBS"
   local targets=(electron)
   if [ "$DO_PACKAGE" = true ]; then
     targets=(electron:electron_dist_zip electron:electron_mksnapshot_zip
