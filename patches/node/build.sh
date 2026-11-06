@@ -13,7 +13,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.1"
+SCRIPTVER="1.0.2"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -44,6 +44,10 @@ NODE_URL="https://github.com/nodejs/node.git"
 
 # Controls minimum Windows target, (unused currently)
 WIN32_WINNT="0x0600"
+
+# Custom Ninja status line.
+export NINJA_SUMMARIZE_BUILD=1
+export NINJA_STATUS="[%r processes, %f/%t @ %o/s | %e sec. ] "
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) HOST_OS=windows ;;
