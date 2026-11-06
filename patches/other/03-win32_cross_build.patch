@@ -38,6 +38,44 @@ error when it is not:
                                  affects Windows builds too, not just cross
                                  builds.
 
+  ui/base/l10n/l10n_util.cc      chromium/ui/0284 -- an IsFontPresent using GDI
+                                 (CreateFont/GetDC/GetTextFace) plus two
+                                 base::win::GetVersion() checks that block
+                                 Amharic on XP without the Abyssinica SIL font.
+                                 Note win/windows_version.cc is inside
+                                 if (is_win) in base/BUILD.gn, so those checks
+                                 would have failed at link rather than compile
+                                 even once the GDI code built; the include moved
+                                 into the file's existing IS_WIN block.
+  ui/base/pointer/touch_ui_controller.cc
+                                 chromium/ui/0174 -- added a
+                                 base::win::Version::WIN10 gate to the
+                                 constructor, while putting its
+                                 base/win/windows_version.h include inside the
+                                 existing IS_WIN block. Other platforms keep
+                                 upstream's condition.
+
+  third_party/xnnpack/src/src/xnnpack/init-once.c
+                                 chromium/third_party/xnnpack/0009 -- pastes in
+                                 Microsoft's NT pushlock.c (EX_PUSH_LOCK,
+                                 KeRaiseIrql, InterlockedCompareExchangePointer)
+                                 as a stand-in for Vista+ InitOnceExecuteOnce,
+                                 ~530 lines with no guard at all. Wrapped in
+                                 XNN_PLATFORM_WINDOWS, which is what the
+                                 xnn_init_once_impl() call sites below it
+                                 already use (common.h defines it from _WIN32).
+
+  v8/src/api/api.cc              chromium/v8/0072 -- adds an #else stub for
+                                 Isolate::SetFilterETWSessionByURL2Callback so
+                                 Windows builds without
+                                 V8_ENABLE_ETW_STACK_WALKING still define it.
+                                 Upstream has no #else at all, and the
+                                 FilterETWSessionByURL2Callback type plus the
+                                 declaration are both inside V8_OS_WIN
+                                 (v8-callbacks.h, v8-isolate.h), so off Windows
+                                 the stub names a type that does not exist. Now
+                                 an #elif defined(V8_OS_WIN).
+
 It also fixes one Electron target that cannot work in a cross build at all:
 mksnapshot_checksum_gen hashes the v8 context snapshot, but Chromium disables
 that snapshot for Windows and macOS cross builds (building Blink twice is slow,
@@ -440,3 +478,144 @@ index 773a144..1acf44d 100644
  #else
      onceControl = 0;
  #endif
+diff --git a/ui/base/l10n/l10n_util.cc b/ui/base/l10n/l10n_util.cc
+index 42c20c0..9733ceb 100644
+--- a/ui/base/l10n/l10n_util.cc
++++ b/ui/base/l10n/l10n_util.cc
+@@ -34,7 +34,6 @@
+ #include "base/strings/string_util.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
+-#include "base/win/windows_version.h"
+ #include "build/build_config.h"
+ #include "third_party/icu/source/common/unicode/rbbi.h"
+ #include "third_party/icu/source/common/unicode/uloc.h"
+@@ -59,12 +58,19 @@
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "base/logging.h"
++#include "base/win/windows_version.h"
+ #include "ui/base/l10n/l10n_util_win.h"
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ namespace l10n_util {
+ namespace {
+ 
++#if BUILDFLAG(IS_WIN)
++// Queries GDI, and only the Windows XP checks below call it. base::win::
++// GetVersion() is Windows-only too: win/windows_version.cc is inside
++// if (is_win) in base/BUILD.gn, so on another platform it would link rather
++// than compile. Guarded so building ui for a non-Windows host -- as a
++// Linux-hosted cross build does -- works.
+ bool IsFontPresent(const wchar_t* font_name) {
+   HFONT hfont = CreateFont(12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                            font_name);
+@@ -81,6 +87,7 @@ bool IsFontPresent(const wchar_t* font_name) {
+   // names here.
+   return (size_ret != 0) && wcscmp(font_name, actual_font_name) == 0;
+ }
++#endif  // BUILDFLAG(IS_WIN)
+ 
+ using ::base::i18n::GetKnownLanguageTag;
+ using ::base::i18n::LanguageTag;
+@@ -148,6 +155,7 @@ bool HasStringsForLocale(const LanguageTag& language_tag,
+   // under a system locale Chrome is not localized to (e.g. Farsi on Linux),
+   // but it'd slow down the start up time a little bit for locales Chrome is
+   // localized to. So, we don't call it here.
++#if BUILDFLAG(IS_WIN)
+   // Block Amharic on Windows XP unless 'Abyssinica SIL' font is present.
+   // On Win XP, no Ethiopic/Amahric font is availabel out of box. We hard-coded
+   // 'Abyssinica SIL' in the resource bundle to use in the UI. Check
+@@ -155,6 +163,7 @@ bool HasStringsForLocale(const LanguageTag& language_tag,
+   if (!(base::win::GetVersion() >= base::win::Version::VISTA ||
+       !base::EqualsCaseInsensitiveASCII(language_tag.tag_string(), "am") ||
+       IsFontPresent(L"Abyssinica SIL")))return false;
++#endif  // BUILDFLAG(IS_WIN)
+   return ui::ResourceBundle::LocaleDataPakExists(
+       language_tag, ui::ResourceBundle::Gender::kDefault);
+ }
+@@ -190,6 +199,7 @@ struct AvailableLocalesTraits
+       // and to which Chrome is not localized.
+       if (IsLocalePartiallyPopulated(locale_name))
+         continue;
++#if BUILDFLAG(IS_WIN)
+   // Block Amharic on Windows XP unless 'Abyssinica SIL' font is present.
+   // On Win XP, no Ethiopic/Amahric font is availabel out of box. We hard-coded
+   // 'Abyssinica SIL' in the resource bundle to use in the UI. Check
+@@ -197,6 +207,7 @@ struct AvailableLocalesTraits
+   if (!(base::win::GetVersion() >= base::win::Version::VISTA ||
+       !base::EqualsCaseInsensitiveASCII(locale_name, "am") ||
+       IsFontPresent(L"Abyssinica SIL"))) continue;
++#endif  // BUILDFLAG(IS_WIN)
+       // Normalize underscores to hyphens because that's what our locale files
+       // use.
+       std::replace(locale_name.begin(), locale_name.end(), '_', '-');
+diff --git a/ui/base/pointer/touch_ui_controller.cc b/ui/base/pointer/touch_ui_controller.cc
+index 35a2cb5..21eb759 100644
+--- a/ui/base/pointer/touch_ui_controller.cc
++++ b/ui/base/pointer/touch_ui_controller.cc
+@@ -192,8 +192,15 @@ TouchUiController* TouchUiController::Get() {
+ 
+ TouchUiController::TouchUiController(TouchUiState touch_ui_state)
+     : touch_ui_state_(touch_ui_state) {
+-  if (base::CurrentUIThread::IsSet() &&
+-      base::win::GetVersion() >= base::win::Version::WIN10) {
++  // The Win10 gate is Windows-only: base/win/windows_version.h is only
++  // included under BUILDFLAG(IS_WIN) above, and win/windows_version.cc is
++  // inside if (is_win) in base/BUILD.gn, so elsewhere base::win::GetVersion()
++  // neither declares nor links. Other platforms keep upstream's condition.
++  if (base::CurrentUIThread::IsSet()
++#if BUILDFLAG(IS_WIN)
++      && base::win::GetVersion() >= base::win::Version::WIN10
++#endif
++  ) {
+ #if BUILDFLAG(USE_BLINK)
+     // Pass the work to a separate task to avoid affecting browser startup time.
+     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+diff --git a/third_party/xnnpack/src/src/xnnpack/init-once.c b/third_party/xnnpack/src/src/xnnpack/init-once.c
+index 6ff6698..665d925 100644
+--- a/third_party/xnnpack/src/src/xnnpack/init-once.c
++++ b/third_party/xnnpack/src/src/xnnpack/init-once.c
+@@ -16,6 +16,14 @@
+   #include <pthread.h>
+ #endif
+ 
++// The push lock implementation below is Windows-only: it is written against
++// the Win32/NT types <windows.h> brings in above, and only the
++// XNN_PLATFORM_WINDOWS branch of xnn_init_once_impl() calls it. Guarded with
++// the same macro as those call sites (common.h defines it from _WIN32) so that
++// building xnnpack for a non-Windows host -- as a Linux-hosted cross build
++// does -- compiles.
++#if XNN_PLATFORM_WINDOWS
++
+ /*++
+ 
+ Copyright (c) 2000  Microsoft Corporation
+@@ -546,6 +554,9 @@ Return Value:
+         ExfReleasePushLock (PushLock);
+     }
+ }
++
++#endif  // XNN_PLATFORM_WINDOWS
++
+ // Initialization guards keep track of the config generation they were
+ // initialized on.
+ //
+diff --git a/v8/src/api/api.cc b/v8/src/api/api.cc
+index 70d5b3d..8ff095b 100644
+--- a/v8/src/api/api.cc
++++ b/v8/src/api/api.cc
+@@ -11294,7 +11294,12 @@ void Isolate::SetFilterETWSessionByURL2Callback(
+   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(this);
+   i_isolate->SetFilterETWSessionByURL2Callback(callback);
+ }
+-#else
++#elif defined(V8_OS_WIN)
++// Windows without ETW stack walking still declares this in v8-isolate.h, so it
++// needs a definition. Elsewhere both the declaration and the
++// FilterETWSessionByURL2Callback type are inside V8_OS_WIN (see
++// v8-callbacks.h), so there is nothing to define and naming the type would not
++// compile -- as a Linux-hosted cross build of Electron shows.
+ void Isolate::SetFilterETWSessionByURL2Callback(
+     FilterETWSessionByURL2Callback callback) {
+ }
