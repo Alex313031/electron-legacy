@@ -1,0 +1,46 @@
+Title: Link crypt32.lib into libnode on Windows
+Origin: electron-legacy (this repo)
+
+src/crypto/crypto_context.cc reads the Windows certificate store under
+#ifdef _WIN32 -- CertOpenStore, CertEnumCertificatesInStore,
+CertGetEnhancedKeyUsage, CertCloseStore -- but libnode's GN target only
+declares psapi.lib. Node's own GYP build picks crypt32.lib up transitively from
+deps/openssl (deps/openssl/unofficial.gni declares it), which Electron does not
+build: node_openssl_path points at //third_party/boringssl, and BoringSSL's GN
+target does not link crypt32.
+
+electron.exe links anyway, because //net and //crypto each add crypt32.lib and
+it ends up on the link line. node_mksnapshot.exe links libnode with neither, so
+a native Windows build fails with:
+
+  lld-link: error: undefined symbol: __declspec(dllimport) CertOpenStore
+  >>> referenced by third_party/electron_node/src/crypto/crypto_context.cc
+
+A Linux-hosted cross build does not hit this: v8_snapshot_toolchain is the host
+toolchain there, so node_mksnapshot is built as a host (Linux) binary.
+
+diff --git a/unofficial.gni b/unofficial.gni
+index 28cf0d2d..bc75b396 100644
+--- a/unofficial.gni
++++ b/unofficial.gni
+@@ -226,7 +226,19 @@ template("node_gn_build") {
+     ] + gypi_values.node_sources
+ 
+     if (is_win) {
+-      libs = [ "psapi.lib" ]
++      libs = [
++        "psapi.lib",
++
++        # src/crypto/crypto_context.cc reads the Windows certificate store
++        # (CertOpenStore, CertEnumCertificatesInStore, CertGetEnhancedKeyUsage,
++        # CertCloseStore) under #ifdef _WIN32. Node's own build gets this
++        # transitively from deps/openssl, but Electron unbundles OpenSSL to
++        # //third_party/boringssl, which does not link it. electron.exe happens
++        # to resolve these anyway because //net and //crypto both add
++        # crypt32.lib, but node_mksnapshot.exe links libnode without either and
++        # fails with "undefined symbol: CertOpenStore" and friends.
++        "crypt32.lib",
++      ]
+     }
+     if (is_mac) {
+       frameworks = [

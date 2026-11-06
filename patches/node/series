@@ -2,3 +2,4 @@
 02-fix-crash-in-uv-get-process-title-on-windows-7.patch
 03-fall-back-to-getsystemtimeasfiletime-when-the-precise.patch
 04-node-version-check-win7.patch
+05-link-crypt32-for-windows-cert-store.patch
