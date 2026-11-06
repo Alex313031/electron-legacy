@@ -10,16 +10,20 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.1.3"
+SCRIPTVER="1.2.0"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Electron release the patches in patches/ are made for.
 ELECTRON_VERSION="44.2.0"
 
-# Where .gclient and the src/ checkout live. Defaults to this repo; override
-# with e.g. `ROOT_PATH=/c/el ./build.sh x64` to use a short path on Windows.
-ROOT_PATH="${ROOT_PATH:-$HERE}"
+# The gclient root: .gclient and the state files beside it (.gclient_entries,
+# .cipd/, .gcs_entries), plus src/, dist/ and build.log. Kept in a subdirectory
+# so the repo itself stays clean; gclient has no way to put that state anywhere
+# but next to .gclient, and .gclient cannot live in src/ because both Electron's
+# and Chromium's DEPS declare their paths as src/... relative to this directory.
+# Override with e.g. `ROOT_PATH=/c/el ./build.sh x64` for a short path on Windows.
+ROOT_PATH="${ROOT_PATH:-$HERE/checkout}"
 
 # Where to clone Electron sources
 SRC_PATH="$ROOT_PATH/src"
@@ -58,10 +62,6 @@ WIN32_WINNT="0x0600"
 # Don't auto update depot_tools
 export DEPOT_TOOLS_UPDATE=0
 
-# Use the locally installed Visual Studio, not Google's internal toolchain.
-# (Cross-building will instead point depot_tools at a packaged toolchain.)
-export DEPOT_TOOLS_WIN_TOOLCHAIN="${DEPOT_TOOLS_WIN_TOOLCHAIN:-0}"
-
 # Whatever SISO_LIMITS the caller set, kept so -j can be folded into it
 # without stacking up over the several builds a single run can do.
 SISO_LIMITS_BASE="${SISO_LIMITS:-}"
@@ -71,6 +71,19 @@ case "$(uname -s)" in
   Linux*) HOST_OS=linux ;;
   *) HOST_OS=unsupported ;;
 esac
+
+# A Windows host builds with its locally installed Visual Studio, so 0. A Linux
+# host has no local VS and must use a packaged toolchain, so 1: with 0,
+# vs_toolchain.py's `update` hook silently does nothing, no
+# src/build/win_toolchain.json is written, and gn then dies in
+# SetEnvironmentAndGetSDKDir with KeyError: 'WINDOWSSDKDIR'. Cross-building also
+# needs DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL (dir holding <zip hash>.zip) and
+# GYP_MSVS_HASH_<toolchain hash>=<zip hash>; see --help.
+if [ "$HOST_OS" = linux ]; then
+  export DEPOT_TOOLS_WIN_TOOLCHAIN="${DEPOT_TOOLS_WIN_TOOLCHAIN:-1}"
+else
+  export DEPOT_TOOLS_WIN_TOOLCHAIN="${DEPOT_TOOLS_WIN_TOOLCHAIN:-0}"
+fi
 
 # Options, set by parse_args
 ARCH=""
@@ -120,7 +133,7 @@ Options:
                               Discards any local changes in src/ (it resets to v$ELECTRON_VERSION).
   -p, --patch                 Only apply patches to already-downloaded sources, then exit; needs no arch.
                               Patches that are already applied are skipped.
-  --sync                      Re-sync existing sources before building (same reset as -d).
+  -s, --sync                  Re-sync existing sources before building (same reset as -d).
                               Without an arch it just syncs, then exits.
   --full-history              Download full git history (default: none, which is far
                               smaller and faster). Only affects repos not yet cloned.
@@ -129,12 +142,21 @@ Options:
   --debug                     Make an unoptimized, full symbol debug build.
 
 Environment:
-  ROOT_PATH          Where .gclient and src/ go (default: $HERE)
+  ROOT_PATH          Where .gclient, src/, dist/ and build.log go
+                     (default: $HERE/checkout)
   SYNC_JOBS          Parallel git operations for gclient sync (default: CPUs, max $MAX_SYNC_JOBS)
   SISO_LIMITS        Extra Siso resource limits; -j appends local=<count> to it
   DEPOT_TOOLS_PATH   depot_tools location if not on PATH (default: \$HOME/depot_tools)
   vs2022_install     Visual Studio path, if not installed in the default location
   WINDOWSSDKDIR      Windows SDK path, if not installed in the default location
+
+Cross-building from Linux (experimental) uses Chromium's packaged Visual Studio
+instead of a local one, and needs both of:
+  DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL
+                     Directory (or URL) holding the toolchain <zip hash>.zip
+  GYP_MSVS_HASH_<toolchain hash>=<zip hash>
+                     Maps the toolchain Chromium pins to that zip. The script
+                     prints the hash it wants if this is missing.
 
 For more details about building Electron, see
 https://www.electronjs.org/docs/latest/development/build-instructions-gn
@@ -266,7 +288,7 @@ parse_args() {
       --package) DO_PACKAGE=true ;;
       -d|--download-sources) ONLY_DOWNLOAD=true ;;
       -p|--patch) ONLY_PATCH=true ;;
-      --sync) DO_SYNC=true ;;
+      -s|--sync) DO_SYNC=true ;;
       --full-history) SHALLOW=false ;;
       --gn-args)
         [ $# -ge 2 ] || arg_error "$1 needs a value"
@@ -384,6 +406,72 @@ install_deps() {
   log "${GRE} Prerequisites OK.${c0}\n"
 }
 
+win_toolchain_hash() {
+  # The VS toolchain package Chromium currently pins. It changes with every
+  # toolchain roll, so read it rather than hardcoding it. Needs sources.
+  sed -nE "s/^TOOLCHAIN_HASH[[:space:]]*=[[:space:]]*'([^']+)'.*/\1/p" \
+      "$SRC_PATH/build/vs_toolchain.py" 2>/dev/null | head -n1
+}
+
+check_cross_toolchain() {
+  # What a Linux host needs before it can target Windows. Checked here, which
+  # runs before the sources exist; the pinned-hash half is in
+  # check_cross_toolchain_pinned below.
+  [ "$DEPOT_TOOLS_WIN_TOOLCHAIN" != 0 ] \
+    || error_exit "Cross-building needs DEPOT_TOOLS_WIN_TOOLCHAIN unset or 1; 0 means 'use a local Visual Studio', which this host hasn't got"
+
+  local base="${DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL:-}"
+  [ -n "$base" ] \
+    || error_exit "Set DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL to the directory holding the toolchain <zip hash>.zip"
+  # Only a local directory is checkable; a real URL is gclient's problem.
+  case "$base" in
+    http://*|https://*|gs://*) ;;
+    *)
+      [ -d "$base" ] \
+        || error_exit "DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL '$base' is not a directory"
+      ls "$base"/*.zip >/dev/null 2>&1 \
+        || error_exit "No toolchain .zip in '$base'"
+      ;;
+  esac
+
+  # The Windows SDK needs a case-insensitive filesystem, which vs_toolchain.py
+  # arranges with a ciopfs FUSE mount over win_toolchain/vs_files.
+  command -v fusermount >/dev/null 2>&1 || command -v fusermount3 >/dev/null 2>&1 \
+    || error_exit "fusermount not found; the Windows SDK is unpacked onto a ciopfs FUSE mount"
+
+  warn "Cross-building Windows binaries on Linux is experimental, see TODO.md."
+}
+
+check_cross_toolchain_pinned() {
+  # Run once the checkout exists: confirm the zip for the pinned toolchain is
+  # mapped and present, and unpack it if the gclient hook hasn't.
+  local hash zip var
+  hash=$(win_toolchain_hash)
+  [ -n "$hash" ] \
+    || error_exit "Could not read TOOLCHAIN_HASH from $SRC_PATH/build/vs_toolchain.py"
+
+  var="GYP_MSVS_HASH_$hash"
+  zip="${!var:-}"
+  [ -n "$zip" ] \
+    || error_exit "Chromium pins VS toolchain $hash; export $var=<zip hash> (the <zip hash>.zip in \$DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL)"
+
+  local base="$DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL"
+  case "$base" in
+    http://*|https://*|gs://*) ;;
+    *) [ -f "$base/$zip.zip" ] \
+         || error_exit "$var=$zip but '$base/$zip.zip' does not exist" ;;
+  esac
+
+  # Written by vs_toolchain.py once the zip is unpacked. Without it gn dies in
+  # SetEnvironmentAndGetSDKDir with KeyError: 'WINDOWSSDKDIR'.
+  if [ ! -f "$SRC_PATH/build/win_toolchain.json" ]; then
+    execute "Unpacking VS toolchain $zip (this takes a while)" \
+        "Unable to unpack the VS toolchain" \
+        py "$SRC_PATH/build/vs_toolchain.py" update --force
+  fi
+  log "${GRE} Using packaged VS toolchain %s for Chromium's %s${c0}\n" "$zip" "$hash"
+}
+
 setup_toolchain() {
   # Make sure we can target Windows from this host before running gn/siso.
   case "$HOST_OS" in
@@ -392,11 +480,9 @@ setup_toolchain() {
         || error_exit "Visual Studio 2022 with C++ tools not found, see '$SCRIPTNAME --deps'"
       ;;
     linux)
-      # TODO: cross-build with a packaged VS toolchain, like Chromium:
-      # DEPOT_TOOLS_WIN_TOOLCHAIN=1, DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL=<dir
-      # with the toolchain .zip>, GYP_MSVS_HASH_<hash>=<zip hash>; .gclient
-      # already carries "win" in target_os. Needs Electron patches in other/.
-      error_exit "Building Windows binaries on Linux isn't supported yet (only -d and -p are); see TODO.md"
+      # Cross-build: there is no local Visual Studio to find, so Chromium's
+      # packaged VS+SDK zip stands in for one. Still experimental, see TODO.md.
+      check_cross_toolchain
       ;;
     *)
       error_exit "Unsupported host OS '$(uname -s)'"
@@ -457,6 +543,8 @@ EOF
   if [ -d "$SRC_PATH" ]; then
     warn "Syncing resets $SRC_PATH to Electron v$ELECTRON_VERSION, discarding local changes."
   fi
+  # --reset throws our patches away, so the tree is unpatched after this.
+  rm -f "$(patches_stamp)"
 
   local flags=(sync --force --reset --delete_unversioned_trees
                --revision "src/electron@refs/tags/v$ELECTRON_VERSION")
@@ -526,6 +614,41 @@ apply_series() {
   log "${GRE} %s: %d applied, %d already applied${c0}\n" "$name" "$applied" "$skipped"
 }
 
+patches_stamp() {
+  printf '%s\n' "$ROOT_PATH/.patches-applied"
+}
+
+patches_digest() {
+  # Fingerprint of everything apply_patches would apply, so the stamp stops
+  # matching as soon as a series or any patch file changes.
+  local name p
+  {
+    for name in chromium electron node other; do
+      local series="$PATCHES_PATH/$name/series"
+      [ -f "$series" ] || continue
+      printf '== %s\n' "$name"
+      cat "$series"
+      while IFS= read -r p || [ -n "$p" ]; do
+        p="${p%$'\r'}"
+        [[ -z "$p" || "$p" == \#* ]] && continue
+        [ -f "$PATCHES_PATH/$name/$p" ] && cat "$PATCHES_PATH/$name/$p"
+      done < "$series"
+    done
+  } | { sha256sum 2>/dev/null || cksum; } | cut -d' ' -f1
+}
+
+patches_are_applied() {
+  # True if this exact patch set was already applied to this checkout. Lets a
+  # build after -d/-p skip the series: re-running it costs a couple of git
+  # invocations per patch across 300+ patches, and a patch that a later one
+  # overlaps may no longer reverse-apply cleanly once the whole series is in,
+  # which apply_series can only treat as a failure.
+  local stamp
+  stamp=$(patches_stamp)
+  [ -f "$stamp" ] || return 1
+  [ "$(cat "$stamp")" = "$(patches_digest)" ]
+}
+
 apply_patches() {
   [ -d "$ELECTRON_PATH" ] || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
 
@@ -543,6 +666,9 @@ apply_patches() {
   apply_series electron "$ELECTRON_PATH"
   apply_series node "$SRC_PATH/third_party/electron_node"
   apply_series other "$SRC_PATH"
+
+  # Record what we just applied so a later build doesn't redo the series.
+  patches_digest > "$(patches_stamp)"
 }
 
 out_dir() {
@@ -778,7 +904,15 @@ main() {
   if [ "$DO_SYNC" = true ] || [ ! -d "$ELECTRON_PATH/.git" ]; then
     fetch_sources
   fi
-  apply_patches
+  if patches_are_applied; then
+    log "${GRE} Patches already applied; delete %s to force${c0}\n" "$(patches_stamp)"
+  else
+    apply_patches
+  fi
+  # Needs the checkout, so it can't go in setup_toolchain with the rest.
+  if [ "$HOST_OS" = linux ]; then
+    check_cross_toolchain_pinned
+  fi
   gen_out
   build_electron
   [ "$DO_PACKAGE" = true ] && package

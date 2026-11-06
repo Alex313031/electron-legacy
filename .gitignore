@@ -16,19 +16,18 @@ Thumbs.db
 *.userosscache
 *.sln.docstates
 
-# Source download dir
+# The gclient root ($ROOT_PATH): .gclient and its state files, src/, dist/ and
+# build.log all live in here, so one entry covers the whole checkout.
+/checkout/
+
+# Same, for anyone pointing ROOT_PATH at this repo instead of checkout/
 /src/
-
-# Dist dir
 /dist/
-
-# gclient checkout state (build.sh uses this repo as the gclient root by default)
-/.gclient
-/.gclient_entries
-/.gclient_previous_*
-/_gclient*/
-/.cipd/
-/_bad_scm/
-
-# build.sh log
-/build.log
+build.log
+.gclient
+.gclient_entries
+.gclient_previous_*
+_gclient*/
+.gcs_entries
+.cipd/
+_bad_scm/
