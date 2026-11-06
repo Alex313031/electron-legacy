@@ -22,6 +22,22 @@ error when it is not:
                                  #if defined(_WIN32), as quiche does not use
                                  Chromium's BUILDFLAG.
 
+  third_party/libxml/src/threads.c
+                                 chromium/third_party/libxml/0082 -- a
+                                 fake_pthread_once standing in for Vista+
+                                 InitOnceExecuteOnce, using Interlocked* and
+                                 SwitchToThread. Guarded with
+                                 HAVE_WIN32_THREADS, libxml's own idiom.
+                                 That patch also retyped onceControl from
+                                 INIT_ONCE to volatile long but left
+                                 xmlCleanupParser copying an INIT_ONCE over it,
+                                 writing 8 bytes into 4 on x64 (clang
+                                 -Wfortify-source catches it). That reset is now
+                                 a plain onceControl = 0, which is what
+                                 fake_pthread_once reads as "not yet run"; it
+                                 affects Windows builds too, not just cross
+                                 builds.
+
 It also fixes one Electron target that cannot work in a cross build at all:
 mksnapshot_checksum_gen hashes the v8 context snapshot, but Chromium disables
 that snapshot for Windows and macOS cross builds (building Blink twice is slow,
@@ -381,3 +397,46 @@ index cebcf86..e97288d 100644
  QuicheIpAddress QuicheIpAddress::Loopback4() {
    QuicheIpAddress result;
    result.family_ = IpAddressFamily::IP_V4;
+diff --git a/third_party/libxml/src/threads.c b/third_party/libxml/src/threads.c
+index 773a144..1acf44d 100644
+--- a/third_party/libxml/src/threads.c
++++ b/third_party/libxml/src/threads.c
+@@ -390,6 +390,13 @@ xmlInitParserWinWrapper(INIT_ONCE *initOnce ATTRIBUTE_UNUSED,
+ }
+ #endif
+ 
++#if defined(HAVE_WIN32_THREADS)
++/*
++ * Stands in for InitOnceExecuteOnce, which is Vista+. Windows-only: it uses
++ * the Interlocked* intrinsics and SwitchToThread, and only xmlInitParser's
++ * HAVE_WIN32_THREADS branch calls it. Guarded so that building libxml for a
++ * non-Windows host -- as a Linux-hosted cross build does -- still compiles.
++ */
+ static int fake_pthread_once(volatile long *once_control,
+                              void (*init_routine)(void)) {
+     // Try for a fast path first. Note: this should be an acquire semantics read
+@@ -412,6 +419,7 @@ static int fake_pthread_once(volatile long *once_control,
+     }
+     return 0;
+ }
++#endif /* HAVE_WIN32_THREADS */
+ 
+ /**
+  * Initialization function for the XML parser.
+@@ -515,10 +523,12 @@ xmlCleanupParser(void) {
+         memcpy(&onceControl, &tmp, sizeof(tmp));
+     }
+ #elif defined(HAVE_WIN32_THREADS)
+-    {
+-        INIT_ONCE tmp = INIT_ONCE_STATIC_INIT;
+-        memcpy(&onceControl, &tmp, sizeof(tmp));
+-    }
++    /*
++     * onceControl is a volatile long here, not an INIT_ONCE: copying an
++     * INIT_ONCE over it wrote 8 bytes into 4. 0 is what fake_pthread_once
++     * reads as "not yet run", which is what this reset wants.
++     */
++    onceControl = 0;
+ #else
+     onceControl = 0;
+ #endif
