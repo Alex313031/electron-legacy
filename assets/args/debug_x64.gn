@@ -1,21 +1,60 @@
+# GN args for a 64-bit debug build. build.sh copies this into
+# src/out/Debug-x64/args.gn and appends target_os and
+# override_electron_version, so don't set those here.
+#
+# Electron's own defaults, including ffmpeg_branding = "Chrome" and
+# proprietary_codecs = true. Anything below that repeats a value from all.gn is
+# stated deliberately, so changing it here is enough.
 import("//electron/build/args/all.gn")
 
+# Target CPU architecture, x64 means 64 bit
 target_cpu = "x64"
 
+# Unoptimized, with debug asserts live: this build is for finding out why
+# something broke, not for shipping or benchmarking.
 is_official_build = false
 is_debug = true
+
+# Keep DCHECKs, which is most of the point of a debug build.
 dcheck_always_on = true
+
+# Still not a component build: it links faster, but the layout stops matching
+# what gets packaged, which makes crashes harder to compare against a release.
 is_component_build = false
+
+# ffmpeg stays its own DLL, as in release, so the two builds stay comparable.
 is_component_ffmpeg = true
+
+# Same codec set as release, so media bugs reproduce here.
 ffmpeg_branding = "Chrome"
 proprietary_codecs = true
 rtc_use_h264 = true
 enable_ffmpeg_video_decoders = true
 enable_hevc_parser_and_hw_decoder = true
+
+# Full debug info: the reason to build this configuration at all. Expect a
+# much larger out dir and link time than release.
 symbol_level = 2
 enable_dsyms = false
+
+# No LTO. It would obscure stack traces and inline away the frames you came
+# here to read, on top of being slow.
 use_thin_lto = false
 thin_lto_enable_optimizations = false
 
+# Inert unless visual_studio_path is also set: with that empty (our case) GN
+# runs build/vs_toolchain.py get_toolchain_dir and overwrites this with the
+# version the toolchain reports. Kept as a record of what these patches target.
 visual_studio_version = "2022"
+
+# Unlike release, fail on warnings: a debug build is where a new warning in
+# these patches should be caught.
 treat_warnings_as_errors = true
+
+# No use_v8_context_snapshot here, unlike release: it would mean building Blink
+# a second time for the host toolchain on a cross build, and the startup win
+# isn't worth that in a debug cycle. (Chromium's default already turns it off
+# for Windows cross builds; on a Windows host it stays on.)
+#
+# No v8_builtins_profiling_log_file either -- PGO data optimizes the build it
+# was collected for, which is not this one.

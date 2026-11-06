@@ -1,24 +1,68 @@
+# GN args for a 32-bit release build. build.sh copies this into
+# src/out/Release-x86/args.gn and appends target_os and
+# override_electron_version, so don't set those here.
+#
+# Electron's own defaults, including ffmpeg_branding = "Chrome" and
+# proprietary_codecs = true. Anything below that repeats a value from all.gn is
+# stated deliberately, so changing it here is enough.
 import("//electron/build/args/all.gn")
 
+# Target CPU architecture, x86 means 32 bit
 target_cpu = "x86"
 
+# Official builds get the full optimization set (whole-program optimization,
+# no debug asserts) and are what upstream ships.
 is_official_build = true
 is_debug = false
+
+# DCHECKs are assertions, not error handling, and cost both size and speed.
 dcheck_always_on = false
+
+# One binary per component instead of a DLL each: slower to link, but it is
+# what ships, and component builds can't be packaged.
 is_component_build = false
+
+# ffmpeg stays its own DLL so consumers can replace it with the codec-free
+# build (build.sh's build_ffmpeg) without relinking Electron.
 is_component_ffmpeg = true
+
+# Media: ship the full codec set. Chromium's own builds are deliberately
+# narrower; these are the licensing-sensitive ones Electron enables.
 ffmpeg_branding = "Chrome"
 proprietary_codecs = true
 rtc_use_h264 = true
 enable_ffmpeg_video_decoders = true
 enable_hevc_parser_and_hw_decoder = true
+
+# No debug info in the binaries. Symbols for crash reports come from the
+# separate PDB packaging step, not from here.
 symbol_level = 0
 enable_dsyms = false
+
+# Thin LTO: cross-module inlining with far less memory and link time than
+# full LTO, which is what makes it usable on a release build at all.
 use_thin_lto = true
 thin_lto_enable_optimizations = true
 
+# Inert unless visual_studio_path is also set: with that empty (our case) GN
+# runs build/vs_toolchain.py get_toolchain_dir and overwrites this with the
+# version the toolchain reports. Kept as a record of what these patches target.
 visual_studio_version = "2022"
+
+# Chromium's warning set moves faster than these patches do; a new warning
+# shouldn't fail a release build.
 treat_warnings_as_errors = false
 
+# Take the V8 context snapshot at build time: it makes creating a V8 context
+# (every renderer, every new window) measurably faster. Chromium leaves this
+# off for Windows cross builds because the snapshot generator links Blink, so
+# a Linux-hosted build compiles Blink a second time for the host toolchain --
+# slow, but worth it for a release. Already the default when building on
+# Windows, where this line is a no-op.
+use_v8_context_snapshot = true
+
+# Electron-collected PGO profile for V8's builtins, downloaded by a gclient
+# hook (checkout_pgo_profiles in .gclient). Reorders and optimizes the
+# builtins for Electron's own workload rather than Chrome's.
 v8_builtins_profiling_log_file =
     "//electron/build/pgo_profiles/electron-v8-builtins.profile"
