@@ -97,6 +97,65 @@ error when it is not:
                                  `if (!s_useDirectWrite) {}` behind where the
                                  GDI branch used to be; removed.
 
+  third_party/blink/.../skia/font_cache_skia.cc
+                                 two separate breakages. chromium/third_party/
+                                 blink/0311 added an unguarded
+                                 `if (!useDirectWrite())` GDI fallback, but
+                                 FontCache::useDirectWrite() is declared under
+                                 BUILDFLAG(IS_WIN) while that function compiles
+                                 everywhere. And 0309 appended
+                                 `fontDescription.useSubpixelPositioning()` as a
+                                 9th FontPlatformData argument -- a typo for
+                                 font_description, and useSubpixelPositioning()
+                                 is a FontCache member (also IS_WIN-only), not a
+                                 FontDescription one. That call sits inside
+                                 !BUILDFLAG(IS_WIN), so it had never compiled on
+                                 any platform: excluded on Windows, broken
+                                 elsewhere. The argument is dropped, which
+                                 restores upstream behaviour -- the parameter
+                                 defaults to defaultUseSubpixelPositioning(),
+                                 and Windows has its own CreateFontPlatformData
+                                 in fonts/win/font_cache_skia_win.cc.
+
+  third_party/blink/.../font_platform_data.h
+                                 that default argument is itself the next
+                                 problem, and it is a link error rather than a
+                                 compile one: 0309 added the parameter and its
+                                 `= defaultUseSubpixelPositioning()` default
+                                 unconditionally, but only defined the function
+                                 in fonts/win/font_platform_data_win.cc, where
+                                 it returns FontCache::useSubpixelPositioning()
+                                 -- IS_WIN-only in turn. Off Windows every call
+                                 that leaves the argument out emits a reference
+                                 to a symbol nothing defines, which took down
+                                 the host-toolchain link of
+                                 v8_context_snapshot_generator (from
+                                 font_cache_skia.cc and from this class's own
+                                 (const FontPlatformData&, float) constructor).
+                                 The default is false off Windows, and the
+                                 declaration moves inside the IS_WIN block next
+                                 to the only code that can satisfy it. Nothing
+                                 reads the m_useSubpixelPositioning the
+                                 parameter feeds -- 0309 writes it in both
+                                 constructors and never uses it -- so this only
+                                 changes which value that dead member holds; the
+                                 live use, QuerySystemForRenderStyle(), is
+                                 Windows-only and keeps the real default.
+
+A second class of host-only breakage is filename case. chromium/sandbox/0319
+restores the Wow64 helper as src/Wow64.cc, src/Wow64.h and src/Wow64_64.cc,
+and lists those names in sandbox/win/BUILD.gn, but two of the #includes it adds
+spell the header "sandbox/win/src/wow64.h" (Chromium's own naming, and what the
+file was called before upstream deleted it). NTFS does not care; a Linux host
+does, and both files fail with "'sandbox/win/src/wow64.h' file not found":
+
+  sandbox/win/src/interception.cc
+  sandbox/win/src/Wow64_64.cc    both includes now match the filename 0319
+                                 actually creates. Renaming the three files to
+                                 lowercase instead would match Chromium style,
+                                 but keeps diverging from the imported patch
+                                 every time it is re-imported.
+
 It also fixes one Electron target that cannot work in a cross build at all:
 mksnapshot_checksum_gen hashes the v8 context snapshot, but Chromium disables
 that snapshot for Windows and macOS cross builds (building Blink twice is slow,
@@ -690,3 +749,101 @@ index fe67852..d940eba 100644
  }
  
  FontCache::~FontCache() = default;
+diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+index 0c86af2..6cfa851 100644
+--- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
++++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+@@ -300,10 +300,15 @@ sk_sp<SkTypeface> FontCache::CreateTypeface(
+   }
+ #endif
+ 
+-  if(!useDirectWrite()) {
++#if BUILDFLAG(IS_WIN)
++  // FontCache::useDirectWrite() is declared under BUILDFLAG(IS_WIN), but this
++  // function is compiled everywhere, so the GDI fallback has to be guarded.
++  if (!useDirectWrite()) {
+     return sk_sp<SkTypeface>(skia::DefaultFontMgr()->legacyCreateTypeface(
+-        name.empty() ? nullptr : name.c_str(), font_description.SkiaFontStyle()));
++        name.empty() ? nullptr : name.c_str(),
++        font_description.SkiaFontStyle()));
+   }
++#endif  // BUILDFLAG(IS_WIN)
+   sk_sp<SkTypeface> typeface = MatchFamilyStyle(
+       name.empty() ? nullptr : name.c_str(), font_description.SkiaFontStyle());
+   return typeface;
+@@ -359,11 +364,16 @@ const FontPlatformData* FontCache::CreateFontPlatformData(
+                           font_description.GetFontSynthesisStyle() ==
+                               FontDescription::kAutoFontSynthesisStyle;
+ 
++  // This overload's trailing subpixelTextPosition argument defaults to
++  // defaultUseSubpixelPositioning(), which is what we want here: this whole
++  // function is inside !BUILDFLAG(IS_WIN) (Windows has its own
++  // CreateFontPlatformData in fonts/win/font_cache_skia_win.cc), and
++  // FontCache::useSubpixelPositioning() is declared only under
++  // BUILDFLAG(IS_WIN), so there is nothing platform-specific to pass.
+   FontPlatformData* font_platform_data = MakeGarbageCollected<FontPlatformData>(
+       typeface, name, font_size, synthetic_bold, synthetic_italic,
+       font_description.TextRendering(), font_description.ResolveFontFeatures(),
+-          font_description.Orientation(),
+-        fontDescription.useSubpixelPositioning());
++      font_description.Orientation());
+ 
+   font_platform_data->SetAvoidEmbeddedBitmaps(
+       BitmapGlyphsBlockList::ShouldAvoidEmbeddedBitmapsForTypeface(*typeface));
+diff --git a/third_party/blink/renderer/platform/fonts/font_platform_data.h b/third_party/blink/renderer/platform/fonts/font_platform_data.h
+index 1b042e6..1419e9f 100644
+--- a/third_party/blink/renderer/platform/fonts/font_platform_data.h
++++ b/third_party/blink/renderer/platform/fonts/font_platform_data.h
+@@ -78,7 +78,16 @@
+                    TextRenderingMode text_rendering,
+                    ResolvedFontFeatures resolved_font_features,
+                    FontOrientation = FontOrientation::kHorizontal,
++#if BUILDFLAG(IS_WIN)
+                    bool subpixelTextPosition = defaultUseSubpixelPositioning());
++#else
++                   // defaultUseSubpixelPositioning() reads
++                   // FontCache::useSubpixelPositioning(), which is Windows-only,
++                   // so every caller off Windows -- including this class's own
++                   // (const FontPlatformData&, float) constructor -- would
++                   // reference a symbol that has no definition.
++                   bool subpixelTextPosition = false);
++#endif
+   ~FontPlatformData();
+ 
+   void Trace(Visitor*) const;
+@@ -149,8 +158,8 @@
+                                             SkFontStyle,
+                                             TextRenderingMode text_rendering);
+ #endif
+-    bool static defaultUseSubpixelPositioning();
+ #if BUILDFLAG(IS_WIN)
++  static bool defaultUseSubpixelPositioning();
+   // TODO(https://crbug.com/808221): Remove and use QuerySystemRenderStyle()
+   // instead.
+     WebFontRenderStyle QuerySystemForRenderStyle(bool useSkiaSubpixelPositioning);
+diff --git a/sandbox/win/src/interception.cc b/sandbox/win/src/interception.cc
+index eb73606..92072ba 100644
+--- a/sandbox/win/src/interception.cc
++++ b/sandbox/win/src/interception.cc
+@@ -30,7 +30,7 @@
+ #include "sandbox/win/src/target_interceptions.h"
+ #include "sandbox/win/src/target_process.h"
+ #include "sandbox/win/src/win_utils.h"
+-#include "sandbox/win/src/wow64.h"
++#include "sandbox/win/src/Wow64.h"
+ 
+ namespace sandbox {
+ 
+diff --git a/sandbox/win/src/Wow64_64.cc b/sandbox/win/src/Wow64_64.cc
+index 357deb8..d465543 100644
+--- a/sandbox/win/src/Wow64_64.cc
++++ b/sandbox/win/src/Wow64_64.cc
+@@ -4,7 +4,7 @@
+ 
+ // Wow64 implementation for native 64-bit Windows (in other words, never WOW).
+ 
+-#include "sandbox/win/src/wow64.h"
++#include "sandbox/win/src/Wow64.h"
+ 
+ namespace sandbox {
+ 

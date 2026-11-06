@@ -1,0 +1,41 @@
+Title: Link //chrome/browser/ui/tabs:features into chromium_src
+Origin: electron-legacy (this repo)
+
+Not a legacy-Windows or cross-build fix: Electron v44.2.0 does not link as
+shipped, on any host.
+
+electron/chromium_src builds a hand-picked set of chrome/ sources into its own
+static_library rather than depending on chrome's targets, so each one needs its
+dependencies restated there. Upstream Electron deliberately keeps
+//chrome/browser/themes out of the build (see Electron's own
+chore_remove_reference_to_chrome_browser_themes.patch) and compiles
+browser_theme_pack.cc itself. In Chromium 152 that file gained a call to
+tabs::IsVerticalTabsFeatureEnabled(), which lives in
+//chrome/browser/ui/tabs:features -- a dependency of //chrome/browser/themes,
+and of nothing Electron links. Nothing catches it until the final link:
+
+  lld-link: error: undefined symbol: bool __cdecl tabs::IsVerticalTabsFeatureEnabled(void)
+  >>> referenced by ../../chrome/browser/themes/browser_theme_pack.cc
+  >>>               obj/electron/chromium_src\chrome/browser_theme_pack.obj
+
+The target is two files (features.cc, features.h) and its only dependency,
+//chrome/browser/ui:ui_features, is already in Electron's link graph, so this
+adds nothing but the symbol. Adding features.cc to chromium_src's own sources
+would not work: the obj name comes from the basename alone, and
+//chrome/browser/devtools/features.cc already claims features.obj in that
+target.
+
+Worth sending upstream.
+
+diff --git a/electron/chromium_src/BUILD.gn b/electron/chromium_src/BUILD.gn
+index c3f3a29..f04b0c8 100644
+--- a/electron/chromium_src/BUILD.gn
++++ b/electron/chromium_src/BUILD.gn
+@@ -212,6 +212,7 @@ static_library("chrome") {
+     "//chrome/browser/predictors:resource_prefetch_predictor_proto",
+     "//chrome/browser/resource_coordinator:mojo_bindings",
+     "//chrome/browser/task_manager/common:impl",
++    "//chrome/browser/ui/tabs:features",
+     "//chrome/browser/ui/webui/tab_search:mojo_bindings",
+     "//chrome/browser/web_applications/mojom:mojom_web_apps_enum",
+     "//components/enterprise/buildflags",

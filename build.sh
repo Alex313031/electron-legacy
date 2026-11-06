@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.3"
+SCRIPTVER="1.2.4"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -116,6 +116,7 @@ DO_CLEAN=false
 DO_SYNC=false
 ONLY_DOWNLOAD=false
 ONLY_PATCH=false
+BUILD_ONLY=false
 SHALLOW=true
 EXTRA_GN_ARGS=()
 
@@ -147,7 +148,8 @@ Options:
   --deps                      Install depot_tools, set git config Chromium
                               needs, and check for Visual Studio and Node.js.
   -j <count>, --jobs <count>  Local job count (default: one per CPU)
-                              Applied via SISO_LIMITS, or -j for use_siso = false.
+                              Passed as -j, plus SISO_LIMITS when Siso drives
+                              the build. Without it autoninja picks CPUs + 2.
   --package                   Package built binaries into dist/ for distribution.
   -d, --download-sources      Only download sources, then exit; for making local modifications.
                               Discards any local changes in src/ (it resets to v$ELECTRON_VERSION).
@@ -155,6 +157,10 @@ Options:
                               Patches that are already applied are skipped.
   -s, --sync                  Re-sync existing sources before building (same reset as -d).
                               Without an arch it just syncs, then exits.
+  -b, --build-only            Build src/ exactly as it is: skip syncing and the
+                              patch series entirely, go straight to gn gen and
+                              the build. For iterating on experimental changes
+                              made directly in the checkout.
   --full-history              Download full git history (default: none, which is far
                               smaller and faster). Only affects repos not yet cloned.
   --gn-args "<args>"          Extra GN args, e.g. --gn-args 'symbol_level=0'. Repeatable.
@@ -166,6 +172,7 @@ Environment:
                      (default: $HERE/checkout)
   SYNC_JOBS          Parallel git operations for gclient sync (default: CPUs, max $MAX_SYNC_JOBS)
   SISO_LIMITS        Extra Siso resource limits; -j appends local=<count> to it
+                     (only when Siso, not Ninja, drives the build)
   DEPOT_TOOLS_PATH   depot_tools location if not on PATH (default: \$HOME/depot_tools)
   vs2022_install     Visual Studio path, if not installed in the default location
   WINDOWSSDKDIR      Windows SDK path, if not installed in the default location
@@ -333,6 +340,7 @@ parse_args() {
       -d|--download-sources) ONLY_DOWNLOAD=true ;;
       -p|--patch) ONLY_PATCH=true ;;
       -s|--sync) DO_SYNC=true ;;
+      -b|--build-only) BUILD_ONLY=true ;;
       --full-history) SHALLOW=false ;;
       --gn-args)
         [ $# -ge 2 ] || arg_error "$1 needs a value"
@@ -356,6 +364,18 @@ parse_args() {
   # outright instead of being silently dropped by a sync-only run below.
   if [ "$DO_PACKAGE" = true ] && [ -z "$ARCH" ]; then
     arg_error "--package needs an architecture"
+  fi
+
+  # --build-only is "build what is in src/ right now", so it contradicts every
+  # flag whose job is to change what's in there, and it has nothing to build
+  # without an arch.
+  if [ "$BUILD_ONLY" = true ]; then
+    if [ "$ONLY_DOWNLOAD" = true ] || [ "$ONLY_PATCH" = true ] || [ "$DO_SYNC" = true ]; then
+      arg_error "--build-only can't be combined with -d, -p or --sync"
+    fi
+    if [ -z "$ARCH" ]; then
+      arg_error "--build-only needs an architecture"
+    fi
   fi
 
   # Syncing doesn't depend on the architecture, so --sync without one is a
@@ -789,13 +809,23 @@ gen_out() {
 }
 
 uses_siso() {
-  # Siso is Chromium's default build driver, so only an explicit
-  # `use_siso = false` opts back into Ninja. Read from the generated args.gn
-  # rather than assets/args/, so --gn-args counts too.
-  local args="$SRC_PATH/$1/args.gn"
-  [ -f "$args" ] \
-    && grep -Eq '^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*false' "$args" \
-    && return 1
+  # Which driver autoninja will pick for this out dir. Mirrors the choice
+  # depot_tools' autoninja.py makes, because that is what decides whether our
+  # job count has to travel as a Ninja or a Siso flag:
+  #   - an explicit `use_siso` in args.gn wins. Read the generated args.gn
+  #     rather than assets/args/, so --gn-args counts too.
+  #   - otherwise Siso is the default for a Chromium checkout (which this is:
+  #     build/config/gclient_args.gni has build_with_chromium = true)...
+  #   - ...except in an out dir Ninja has already built in. autoninja prints a
+  #     "switch to Siso" suggestion and stays on Ninja, so the .ninja_deps it
+  #     left behind stays usable. Our out dirs are in exactly that state.
+  local out="$SRC_PATH/$1"
+  local args="$out/args.gn"
+  if [ -f "$args" ]; then
+    grep -Eq '^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*false' "$args" && return 1
+    grep -Eq '^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*true' "$args" && return 0
+  fi
+  [ -f "$out/.ninja_deps" ] && return 1
   return 0
 }
 
@@ -812,18 +842,23 @@ autoninja() {
   # Both Ninja and Siso take -v to echo every command line.
   [ "$VERBOSE" = 1 ] && flags+=(-v)
 
-  # JOBS is always set by parse_args, defaulting to the CPU count.
+  # JOBS is always set by parse_args, defaulting to the CPU count. Always pass
+  # it as -j: autoninja hands that straight to Ninja, and rewrites it into
+  # Siso's -local_jobs (Siso itself rejects -j). Leaving it off lets autoninja
+  # pick the count instead -- CPUs + 2 -- which is how a -j16 on a 32-CPU host
+  # ended up building with 34 jobs.
+  flags+=(-j "$JOBS")
+
   if [ -n "$out" ] && uses_siso "$out"; then
-    # Siso deprecated -j, and autoninja rewrites it to -local_jobs, which
-    # older Siso builds don't have either. SISO_LIMITS is read by Siso
-    # itself and has outlived both flags; local= is the -local_jobs
-    # equivalent. It also sidesteps autoninja dropping -j altogether (with
-    # only a warning) whenever the count exceeds the CPU count.
+    # SISO_LIMITS is read by Siso itself, and covers the one case -j does not:
+    # autoninja drops it with only a warning whenever the count exceeds the CPU
+    # count, even though -local_jobs would have taken it. local= is the
+    # -local_jobs equivalent.
     export SISO_LIMITS="${SISO_LIMITS_BASE:+$SISO_LIMITS_BASE,}local=$JOBS"
     log "${CYA} Limiting Siso to %s local jobs (SISO_LIMITS=%s)${c0}\n" \
         "$JOBS" "$SISO_LIMITS"
   else
-    flags+=(-j "$JOBS")
+    log "${CYA} Limiting Ninja to %s jobs${c0}\n" "$JOBS"
   fi
 
   cd "$SRC_PATH" || error_exit "Unable to enter $SRC_PATH"
@@ -988,21 +1023,30 @@ main() {
   clone_depot_tools
   check_python
 
-  if [ "$DO_SYNC" = true ] || [ ! -d "$ELECTRON_PATH/.git" ]; then
-    fetch_sources
-  fi
-  if patches_are_applied; then
-    log "${GRE} Patches already applied; delete %s to force${c0}\n" "$(patches_stamp)"
-  elif [ -f "$(patches_stamp)" ]; then
-    # A stamp that doesn't match means the patch set changed since it was
-    # applied. Re-running the series over an already-patched tree can't work:
-    # the series overlaps itself (e.g. angle/0004 rewrites lines angle/0003
-    # touched), so an applied patch stops reverse-applying cleanly once a later
-    # one lands, and apply_series can only read that as a failure. Only a reset
-    # gets back to a tree the series applies to.
-    error_exit "patches/ changed since they were applied to $SRC_PATH; re-run with --sync to reset and re-apply"
+  if [ "$BUILD_ONLY" = true ]; then
+    # Take src/ exactly as it is: no sync, and no patch series, not even the
+    # stamp check. The point is to iterate on changes made directly in the
+    # checkout, which is precisely what makes the stamp stop matching.
+    [ -d "$ELECTRON_PATH/.git" ] || \
+        error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
+    warn "--build-only: building $SRC_PATH as it is, skipping sync and patches."
   else
-    apply_patches
+    if [ "$DO_SYNC" = true ] || [ ! -d "$ELECTRON_PATH/.git" ]; then
+      fetch_sources
+    fi
+    if patches_are_applied; then
+      log "${GRE} Patches already applied; delete %s to force${c0}\n" "$(patches_stamp)"
+    elif [ -f "$(patches_stamp)" ]; then
+      # A stamp that doesn't match means the patch set changed since it was
+      # applied. Re-running the series over an already-patched tree can't work:
+      # the series overlaps itself (e.g. angle/0004 rewrites lines angle/0003
+      # touched), so an applied patch stops reverse-applying cleanly once a later
+      # one lands, and apply_series can only read that as a failure. Only a reset
+      # gets back to a tree the series applies to.
+      error_exit "patches/ changed since they were applied to $SRC_PATH; re-run with --sync to reset and re-apply, or --build-only to build the tree as it is"
+    else
+      apply_patches
+    fi
   fi
   # Needs the checkout, so it can't go in setup_toolchain with the rest.
   if [ "$HOST_OS" = linux ]; then

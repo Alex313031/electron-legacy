@@ -5,7 +5,12 @@ versions of Windows (Currently 7/8/8.1, XP/Vista support planned).
 
 It is based on patches from [Electron-for-windows-7](https://github.com/e3kskoy7wqk/Electron-for-windows-7)
 
+The current source is for Electron 44.
+
+For an overview how Electron works, see [electron-design.md](./assets/electron-design.md).
 
 ## License
 
-The patches and code in this repo use the [BSD-3 License](./LICENSE.md), Electron itself uses the [MIT License](https://github.com/electron/electron/blob/main/LICENSE) and other libraries with their respective licenses.
+The patches and code in this repo are licensed under the [BSD-3 License](./LICENSE.md).
+
+Electron itself uses the [MIT License](https://github.com/electron/electron/blob/main/LICENSE) and other libraries with their own respective licenses.

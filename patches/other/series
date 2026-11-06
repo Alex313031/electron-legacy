@@ -1,2 +1,3 @@
 01-disable-redraw-lock-dropped-from-electron-restored.patch
 03-win32_cross_build.patch
+06-link-vertical-tabs-features.patch
