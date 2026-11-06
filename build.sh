@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.0"
+SCRIPTVER="1.2.1"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -61,6 +61,10 @@ WIN32_WINNT="0x0600"
 
 # Don't auto update depot_tools
 export DEPOT_TOOLS_UPDATE=0
+
+# Custom Ninja status line.
+export NINJA_SUMMARIZE_BUILD=1
+export NINJA_STATUS="[%r processes, %f/%t @ %o/s | %e sec. ] "
 
 # Whatever SISO_LIMITS the caller set, kept so -j can be folded into it
 # without stacking up over the several builds a single run can do.
@@ -262,6 +266,26 @@ py() {
     dt python3 "$@"
   else
     python3 "$@"
+  fi
+}
+
+# Run gn. Prefers the binary DEPS pins in buildtools/, which is version-matched
+# to this checkout; depot_tools' gn is just whatever is installed there, and a
+# gn older than the checkout rejects newer constructs (e.g. public_inputs in
+# devtools-frontend's copy.gni, which needs gn 2486+). Override with GN=<path>.
+gn() {
+  local bin="${GN:-}"
+  if [ -z "$bin" ]; then
+    case "$HOST_OS" in
+      windows) bin="$SRC_PATH/buildtools/win/gn.exe" ;;
+      *)       bin="$SRC_PATH/buildtools/linux64/gn" ;;
+    esac
+    [ -x "$bin" ] || bin=""
+  fi
+  if [ -n "$bin" ]; then
+    "$bin" "$@"
+  else
+    dt gn "$@"
   fi
 }
 
@@ -694,7 +718,7 @@ write_args() {
     done
   } > "$SRC_PATH/$out/args.gn"
   cd "$SRC_PATH" || error_exit "Unable to enter $SRC_PATH"
-  execute "Generating $out" "gn gen failed" dt gn gen "$out"
+  execute "Generating $out" "gn gen failed" gn gen "$out"
 }
 
 version_arg() {
@@ -765,6 +789,23 @@ autoninja() {
       dt autoninja "${flags[@]}" "$@"
 }
 
+ffmpeg_out_dir() {
+  printf 'out/ffmpeg-%s\n' "$ARCH"
+}
+
+build_ffmpeg() {
+  # Our builds always ship ffmpeg with proprietary codecs (ffmpeg_branding =
+  # "Chrome", proprietary_codecs = true in assets/args). Upstream also
+  # publishes a codec-free ffmpeg.dll that consumers can drop in place of ours
+  # when they can't ship those codecs, so build that too -- it needs its own
+  # out dir because it inverts those two args (see electron/build/args/ffmpeg.gn).
+  local ffout
+  ffout=$(ffmpeg_out_dir)
+  write_args "$ffout" 'import("//electron/build/args/ffmpeg.gn")' \
+      'target_os = "win"' "target_cpu = \"$ARCH\"" "$(version_arg)"
+  autoninja -C "$ffout" electron:electron_ffmpeg_zip
+}
+
 build_electron() {
   # Build it!
   local targets=(electron)
@@ -774,6 +815,9 @@ build_electron() {
   fi
   autoninja -C "$(out_dir)" "${targets[@]}"
   log "${GRE} Built Electron in %s${c0}\n" "$SRC_PATH/$(out_dir)"
+  # Built here rather than from package() so every compile happens in the
+  # build step and packaging only copies what is already built.
+  [ "$DO_PACKAGE" = true ] && build_ffmpeg
 }
 
 package() {
@@ -801,7 +845,7 @@ package() {
   # CI ("Fixup Mksnapshot"). Done on the copy so the build output stays as built.
   cd "$SRC_PATH" || error_exit "Unable to enter $SRC_PATH"
   log "${CYA} Packaging mksnapshot${c0}\n"
-  dt gn desc "$(out_dir)" v8:run_mksnapshot_default args > "$out/mksnapshot_args" 2>>"$LOG_FILE" \
+  gn desc "$(out_dir)" v8:run_mksnapshot_default args > "$out/mksnapshot_args" 2>>"$LOG_FILE" \
     || error_exit "gn desc failed, check $LOG_FILE for details."
   sed -i -e '/builtins-pgo/d' -e '/pgo_profiles/d' -e '/--turbo-profiling-input/d' \
       -e '/--reorder-builtins/d' -e '/--warn-about-builtin-profile-data/d' \
@@ -812,13 +856,10 @@ package() {
       py "$HERE/tools/zip_append.py" "$dest/mksnapshot-$suffix.zip" \
       "$out/mksnapshot_args=mksnapshot_args" "$out/gen/v8/embedded.S=gen/v8/embedded.S"
 
-  # Proprietary-codec-free ffmpeg.dll, built in its own out dir like upstream.
-  local ffout="out/ffmpeg-$ARCH"
-  write_args "$ffout" 'import("//electron/build/args/ffmpeg.gn")' \
-      'target_os = "win"' "target_cpu = \"$ARCH\"" "$(version_arg)"
-  autoninja -C "$ffout" electron:electron_ffmpeg_zip
+  # The codec-free ffmpeg.dll build_ffmpeg() produced, for consumers who swap
+  # it in for the proprietary-codec one our builds ship.
   execute "Packaging ffmpeg" "Unable to copy ffmpeg.zip" \
-      cp "$SRC_PATH/$ffout/ffmpeg.zip" "$dest/ffmpeg-$suffix.zip"
+      cp "$SRC_PATH/$(ffmpeg_out_dir)/ffmpeg.zip" "$dest/ffmpeg-$suffix.zip"
 
   # TypeScript definitions and API description (arch independent).
   cd "$ELECTRON_PATH" || error_exit "Unable to enter $ELECTRON_PATH"
@@ -906,6 +947,14 @@ main() {
   fi
   if patches_are_applied; then
     log "${GRE} Patches already applied; delete %s to force${c0}\n" "$(patches_stamp)"
+  elif [ -f "$(patches_stamp)" ]; then
+    # A stamp that doesn't match means the patch set changed since it was
+    # applied. Re-running the series over an already-patched tree can't work:
+    # the series overlaps itself (e.g. angle/0004 rewrites lines angle/0003
+    # touched), so an applied patch stops reverse-applying cleanly once a later
+    # one lands, and apply_series can only read that as a failure. Only a reset
+    # gets back to a tree the series applies to.
+    error_exit "patches/ changed since they were applied to $SRC_PATH; re-run with --sync to reset and re-apply"
   else
     apply_patches
   fi
