@@ -31,12 +31,28 @@ than hand-maintaining a copy.
                     electron bin, and anything resolving the electron package
                     all keep working.
 
+  npm/install.js    extractFile() uses extract-zip rather than upstream's
+                    @electron-internal/extract-zip, and package.json swaps the
+                    dependency to match. Upstream's is a Rust/napi addon, and
+                    its bundled prebuild imports ProcessPrng from
+                    bcryptprimitives.dll (Windows 10+) and WaitOnAddress from
+                    api-ms-win-core-synch-l1-2-0.dll (Windows 8+), so it cannot
+                    load on the systems this whole project exists for: `npm i`
+                    on Windows 7 dies in its binding.js with "Cannot find
+                    native binding", which is napi's generic message and not
+                    the npm optional-dependency bug it points at -- the
+                    prebuilds ship inside the package, so there is no optional
+                    dependency to miss. extract-zip is the extractor Electron
+                    used through v43 and is pure JavaScript down through yauzl,
+                    so it has no OS floor of its own. It is slower, which costs
+                    nothing on a one-time install.
+
 Checksum verification is left on. upstream's install.js reads ./checksums.json,
 and --npm generates it from the SHASUMS256.txt that package() already writes,
 so there is no reason to disable it.
 
 diff --git a/electron/npm/install.js b/electron/npm/install.js
-index 1d0f702..b9abbd7 100644
+index 1d0f702..71676c0 100644
 --- a/electron/npm/install.js
 +++ b/electron/npm/install.js
 @@ -9,6 +9,14 @@
@@ -62,8 +78,35 @@ index 1d0f702..b9abbd7 100644
    force: process.env.force_no_cache === 'true',
    cacheRoot: process.env.electron_config_cache,
    checksums:
+@@ -75,11 +84,21 @@
+ 
+ // unzips and makes path.txt point at the correct executable
+ function extractFile(zipPath) {
+-  // Loaded here, not at the top of the file: the extractor has a native
+-  // binding, and an OS policy can block its load (see electron/electron#52481).
+-  // A lazy require keeps `isInstalled()` working in that case, so an
+-  // already-installed dist does not need the extractor at all.
+-  const { extract } = require('@electron-internal/extract-zip');
++  // extract-zip, not upstream's @electron-internal/extract-zip, which is the
++  // extractor Electron used through v43. Upstream's is a Rust/napi addon whose
++  // prebuilt index.win32-x64-msvc.node imports ProcessPrng from
++  // bcryptprimitives.dll (Windows 10+) and WaitOnAddress from
++  // api-ms-win-core-synch-l1-2-0.dll (Windows 8+), so it cannot load on the
++  // systems this distribution exists for -- `npm i` dies in its binding.js
++  // with "Cannot find native binding", which is its generic message and not
++  // the npm optional-dependency bug it names (the prebuilds are bundled, so
++  // there is no optional dependency to miss). extract-zip is pure JavaScript
++  // down to yauzl, so it has no such floor.
++  //
++  // Still required lazily, as upstream does: it keeps `isInstalled()` working
++  // when the extractor cannot load at all, so an already-installed dist never
++  // needs it (see electron/electron#52481).
++  const extract = require('extract-zip');
+ 
+   const distPath = process.env.ELECTRON_OVERRIDE_DIST_PATH || path.join(__dirname, 'dist');
+ 
 diff --git a/electron/npm/package.json b/electron/npm/package.json
-index 23fc312..4597066 100644
+index 23fc312..24127e5 100644
 --- a/electron/npm/package.json
 +++ b/electron/npm/package.json
 @@ -1,4 +1,15 @@
@@ -82,3 +125,15 @@ index 23fc312..4597066 100644
    "main": "index.js",
    "types": "electron.d.ts",
    "bin": {
+@@ -16,9 +27,9 @@
+     "install.js"
+   ],
+   "dependencies": {
+-    "@electron-internal/extract-zip": "^1.0.1",
+     "@electron/get": "^5.0.0",
+-    "@types/node": "^24.9.0"
++    "@types/node": "^24.9.0",
++    "extract-zip": "^2.0.1"
+   },
+   "engines": {
+     "node": ">= 22.12.0"

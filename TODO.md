@@ -9,11 +9,11 @@
    `assets/args/release_x86.gn` sets `chrome_pgo_phase = 0` and 32 bit builds give up the PGO
    speedup. This is the only difference between the x86 and x64 GN args besides `target_cpu`
  - Publish. npm has no subdirectory support for git dependencies, so the package has to sit at the
-   root of whatever ref consumers install. `git subtree split --prefix=npm_package -b <branch>`,
-   tag that commit `v<version>`, and attach the `dist/v<version>/*.zip` files to its release --
-   that makes both the install URL in the README and the mirror in `install.js` resolve. Note the
-   tag then points at the split commit rather than at the source tree, so source snapshots want
-   their own tag. Re-run `./build.sh --npm` for every release
+   root of whatever ref consumers install. Keep the source for a release on a `v<version>-src`
+   branch, then `git subtree split --prefix=npm_package`, tag that commit `v<version>`, and attach
+   the `dist/v<version>/*.zip` files to its release -- that one tag makes both the install URL in
+   the README and the mirror in `install.js` resolve, and the release notes point at the `-src`
+   branch for the tree it was actually built from. Re-run `./build.sh --npm` for every release
  - PR the two fixes that aren't legacy-Windows specific:
    - the missing `//chrome/browser/ui/tabs:features` dependency (`patches/other/06`), which breaks
      the final link of Electron 44.2.0 on any host

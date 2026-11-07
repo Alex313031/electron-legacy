@@ -84,11 +84,21 @@ function isInstalled() {
 
 // unzips and makes path.txt point at the correct executable
 function extractFile(zipPath) {
-  // Loaded here, not at the top of the file: the extractor has a native
-  // binding, and an OS policy can block its load (see electron/electron#52481).
-  // A lazy require keeps `isInstalled()` working in that case, so an
-  // already-installed dist does not need the extractor at all.
-  const { extract } = require('@electron-internal/extract-zip');
+  // extract-zip, not upstream's @electron-internal/extract-zip, which is the
+  // extractor Electron used through v43. Upstream's is a Rust/napi addon whose
+  // prebuilt index.win32-x64-msvc.node imports ProcessPrng from
+  // bcryptprimitives.dll (Windows 10+) and WaitOnAddress from
+  // api-ms-win-core-synch-l1-2-0.dll (Windows 8+), so it cannot load on the
+  // systems this distribution exists for -- `npm i` dies in its binding.js
+  // with "Cannot find native binding", which is its generic message and not
+  // the npm optional-dependency bug it names (the prebuilds are bundled, so
+  // there is no optional dependency to miss). extract-zip is pure JavaScript
+  // down to yauzl, so it has no such floor.
+  //
+  // Still required lazily, as upstream does: it keeps `isInstalled()` working
+  // when the extractor cannot load at all, so an already-installed dist never
+  // needs it (see electron/electron#52481).
+  const extract = require('extract-zip');
 
   const distPath = process.env.ELECTRON_OVERRIDE_DIST_PATH || path.join(__dirname, 'dist');
 

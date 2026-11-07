@@ -88,6 +88,11 @@ Running `--npm` after packaging more than one architecture produces one package
 that serves them all, since `dist/` accumulates arches and the checksums cover
 whatever is there.
 
+The `v<version>` tag that consumers install carries this package at its root,
+because npm has no subdirectory support for git dependencies. It is produced
+with `git subtree split --prefix=npm_package`, so it is not the source tree —
+that lives on the `v<version>-src` branch, which the release notes link to.
+
 ## License
 
 MIT, as upstream Electron. See [LICENSE](LICENSE).
