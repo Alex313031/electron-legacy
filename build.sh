@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.4"
+SCRIPTVER="1.2.5"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -910,7 +910,16 @@ package() {
   # / node-gyp expects for native modules.
   local out="$SRC_PATH/$(out_dir)"
   local ver="v$ELECTRON_VERSION"
-  local suffix="$ver-win32-$ARCH"
+  # Release artifacts are named with Node's architecture string, not GN's: 32-bit
+  # is ia32 there and x86 here. Everything that resolves an Electron download --
+  # @electron/get, electron-builder, node-gyp via npm_config_disturl -- derives
+  # the name from process.arch, so a win32-x86 zip is a zip nothing will find.
+  # Electron's own tooling does this mapping in script/lib/config.py's
+  # get_target_arch(); the import-library directories below keep the GN spelling
+  # (win-x86), which is the layout upstream's upload-node-headers.py publishes.
+  local zip_arch="$ARCH"
+  [ "$ARCH" = x86 ] && zip_arch=ia32
+  local suffix="$ver-win32-$zip_arch"
   local dest="$DIST_PATH/$ver"
   local headers="$DIST_PATH/headers/$ver"
   create_dir "$dest"
