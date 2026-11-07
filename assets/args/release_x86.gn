@@ -63,6 +63,18 @@ use_v8_context_snapshot = true
 
 # Electron-collected PGO profile for V8's builtins, downloaded by a gclient
 # hook (checkout_pgo_profiles in .gclient). Reorders and optimizes the
-# builtins for Electron's own workload rather than Chrome's.
+# builtins for Electron's own workload rather than Chrome's. Arch-independent,
+# unlike the Clang profiles below.
 v8_builtins_profiling_log_file =
     "//electron/build/pgo_profiles/electron-v8-builtins.profile"
+
+# No Clang PGO for 32-bit. Electron resolves its profiles through state files
+# in //electron/build/pgo_profiles (see the IS_WIN branch in
+# //build/config/compiler/pgo/BUILD.gn, which still names "win-x86"), but it
+# only ever published profiles for the 64-bit platforms it ships -- there is no
+# win-x86.pgo.txt to read, so an official build otherwise dies in gn gen with
+#   ERROR Could not read file .../pgo_profiles/win-x86.pgo.txt
+# Collecting our own would mean running Electron's profile generation for x86;
+# until then 32-bit builds give up the ~10% PGO speedup. This arg is what that
+# costs, and it is the only difference from release_x64.gn beyond target_cpu.
+chrome_pgo_phase = 0

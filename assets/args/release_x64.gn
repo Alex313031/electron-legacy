@@ -66,3 +66,6 @@ use_v8_context_snapshot = true
 # builtins for Electron's own workload rather than Chrome's.
 v8_builtins_profiling_log_file =
     "//electron/build/pgo_profiles/electron-v8-builtins.profile"
+
+# Full PGO optimizations
+chrome_pgo_phase = 2
