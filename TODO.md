@@ -20,6 +20,11 @@
    - defining `mksnapshot` and `v8_context_snapshot_generator` in the target toolchain (part of
      `patches/other/03`), without which a cross-OS build ships host binaries in `mksnapshot.zip`
  - Linux and macOS builds
+ - Host `dist/headers/` as a directory tree (a `gh-pages` branch would do). Release assets are
+   flat, so `<disturl>/v<version>/win-x64/node.lib` cannot exist there, and without it
+   `npm_config_disturl` can't resolve -- native modules won't build against our Electron. Not
+   needed for apps that only consume the zips, but a hard blocker for anything that rebuilds
+   native modules, i.e. the VSCodium item below
  - Split `patches/node/` into its own repo and add it back as a submodule. Watch out that
    `build.sh` would silently skip the node series if the submodule isn't checked out
  - Restore XP/Vista support
@@ -28,3 +33,4 @@
  - Add SIMD args/compiler optimization flags from Thorium, including baseline SSE2 not SSE3 for x86 builds.
  - Add HEVC/AC3 patch from Thorium
  - Add component Widevine load patch (it won't be L1 verified because no signature, but at least for testing it will load like Chromium)
+ - Patch README, LICENSE, and docs/ about legacy Windows support and Alex313031
