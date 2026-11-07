@@ -1,0 +1,6 @@
+# Created by install.js at install time, not released.
+dist/
+path.txt
+
+node_modules/
+package-lock.json
