@@ -168,11 +168,36 @@ snapshot_checksum.h are guarded by it. Note release builds set
 use_v8_context_snapshot = true explicitly (see assets/args), which turns the
 checksum back on and accepts the second Blink build.
 
+The mksnapshot zip is the same shape of problem one step further out. V8 defines
+mksnapshot only in v8_snapshot_toolchain (v8/BUILD.gn), and
+//tools/v8_context_snapshot does the same for its generator; that toolchain is
+chosen so the build can *run* those tools, which on a cross-OS build means the
+host's. Electron then ships them in mksnapshot.zip, so every entry came out of
+clang_x64/ as an ELF binary -- including two named .dll -- and no mksnapshot.exe
+existed anywhere in the out dir, because no target had ever declared one. The
+zip is consumed on the platform it is named for (@electron/mksnapshot downloads
+the one matching its own and runs it), so it has to hold target-OS binaries.
+
+Both executables are now defined in the target toolchain as well, and Electron
+packages those. Where host and target match, which is every build upstream does,
+v8_snapshot_toolchain already is the default toolchain: the conditions keep their
+old value and mksnapshot_deps names the toolchain it was resolving to anyway.
+Stating it unconditionally rather than branching on host_os == target_os is what
+makes a Linux-hosted cross build and a native Windows build produce the same
+zip. The build still runs the snapshot tools from v8_snapshot_toolchain --
+run_mksnapshot_default and friends ask for it explicitly -- so this only adds the
+two target-toolchain links, about five minutes for x64.
+
+One deliberate difference from upstream for 32-bit targets: v8_snapshot_toolchain
+there is the x64 host toolchain even on Windows, so upstream's win32-ia32 zip
+holds an x64 mksnapshot.exe. Ours holds a 32-bit one, which runs on both. That is
+the cost of making the artifact depend on the target alone rather than on which
+host built it.
 diff --git a/electron/BUILD.gn b/electron/BUILD.gn
-index cef1bb8..dce5c54 100644
+index cef1bb8..253faad 100644
 --- a/electron/BUILD.gn
 +++ b/electron/BUILD.gn
-@@ -603,8 +603,7 @@ source_set("electron_lib") {
+@@ -603,8 +603,7 @@
      "//v8:v8_libplatform",
    ]
  
@@ -182,7 +207,7 @@ index cef1bb8..dce5c54 100644
      deps += [ ":mksnapshot_checksum_gen" ]
    }
  
-@@ -1093,8 +1092,11 @@ if (electron_generate_js2c_code_cache) {
+@@ -1093,8 +1092,11 @@
  # tools/v8_context_snapshot writes its output to $root_build_dir regardless
  # of toolchain, so this is only well-formed in the default toolchain (where
  # $root_out_dir == $root_build_dir). It is also only needed there -- only the
@@ -196,6 +221,31 @@ index cef1bb8..dce5c54 100644
    action("mksnapshot_checksum_gen") {
      script = "build/checksum_header.py"
  
+@@ -1866,13 +1868,22 @@
+   outputs = [ "$root_build_dir/chromedriver.zip" ]
+ }
+ 
++# mksnapshot.zip is downloaded per platform (@electron/mksnapshot fetches the
++# one matching its own) and run there, so it has to hold target-OS binaries.
++# v8_snapshot_toolchain is chosen so the build can *run* mksnapshot, which on a
++# cross-OS build makes it the host's toolchain -- packaging that gives a
++# win32 zip full of ELF executables. Take the target toolchain's copies
++# instead. Where host and target match, which is every build upstream does,
++# v8_snapshot_toolchain already is the default toolchain and nothing changes;
++# stating it unconditionally is what makes a Linux-hosted cross build and a
++# native Windows build produce the same zip.
+ mksnapshot_deps = [
+   ":licenses",
+-  "//v8:mksnapshot($v8_snapshot_toolchain)",
++  "//v8:mksnapshot($default_toolchain)",
+ ]
+ 
+ if (use_v8_context_snapshot) {
+-  mksnapshot_deps += [ "//tools/v8_context_snapshot:v8_context_snapshot_generator($v8_snapshot_toolchain)" ]
++  mksnapshot_deps += [ "//tools/v8_context_snapshot:v8_context_snapshot_generator($default_toolchain)" ]
+ }
+ 
+ group("electron_mksnapshot") {
 diff --git a/electron/buildflags/BUILD.gn b/electron/buildflags/BUILD.gn
 index ef00ad2..825a701 100644
 --- a/electron/buildflags/BUILD.gn
@@ -236,6 +286,42 @@ index 801732c..e8d8e17 100644
 +enable_v8_context_snapshot_checksum =
 +    v8_use_external_startup_data && use_v8_context_snapshot &&
 +    current_toolchain == default_toolchain
+diff --git a/v8/BUILD.gn b/v8/BUILD.gn
+index 81c88f5..6fb6192 100644
+--- a/v8/BUILD.gn
++++ b/v8/BUILD.gn
+@@ -8022,7 +8022,13 @@
+   }
+ }
+ 
+-if (current_toolchain == v8_snapshot_toolchain) {
++# v8_snapshot_toolchain is the toolchain that can run mksnapshot during the
++# build, which on a cross-OS build is the host's. Electron also ships this
++# binary in mksnapshot.zip, where it has to run on the target OS instead, so
++# define it in the target toolchain too. On a build whose host and target match
++# the two are the same toolchain and this is the upstream condition.
++if (current_toolchain == v8_snapshot_toolchain ||
++    current_toolchain == default_toolchain) {
+   v8_executable("mksnapshot") {
+     sources = [
+       "src/snapshot/builtins-effects-dummy.cc",
+diff --git a/tools/v8_context_snapshot/BUILD.gn b/tools/v8_context_snapshot/BUILD.gn
+index 835527b..f313763 100644
+--- a/tools/v8_context_snapshot/BUILD.gn
++++ b/tools/v8_context_snapshot/BUILD.gn
+@@ -91,7 +91,11 @@
+     outputs = [ output_file ]
+   }
+ 
+-  if (v8_snapshot_toolchain == current_toolchain) {
++  # Defined in the target toolchain as well as the snapshot one, for the same
++  # reason as //v8:mksnapshot: Electron ships this in mksnapshot.zip, which is
++  # consumed on the target OS, not on whatever host produced it.
++  if (v8_snapshot_toolchain == current_toolchain ||
++      default_toolchain == current_toolchain) {
+     executable("v8_context_snapshot_generator") {
+       sources = [ "v8_context_snapshot_generator.cc" ]
+ 
 diff --git a/electron/shell/app/electron_main_delegate.cc b/electron/shell/app/electron_main_delegate.cc
 index c5be8a0..49cb3c4 100644
 --- a/electron/shell/app/electron_main_delegate.cc
