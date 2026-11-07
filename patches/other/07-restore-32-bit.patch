@@ -1,0 +1,158 @@
+Title: Restore 32-bit Windows (ia32) targeting
+Upstream-Commit: 5517a93dec45 (2026-07-13) feat!: remove 32-bit Windows (ia32) and Linux ARM (armv7l) builds (#51816)
+Origin: electron-legacy (this repo)
+
+A partial revert of #51816, which is what ended 32-bit Windows at v43.x. Only
+the parts that a 32-bit build or its artifacts need; the rest of that commit is
+out of scope here:
+
+  .github/** (20 files)        CI matrices. This repo builds with build.sh, not
+                               Electron's workflows.
+  spec/** (9 files)            removed ia32-specific skips in the test suite.
+  README.md, docs/**           the announcement itself. docs/breaking-changes.md
+                               keeps its entry: it is accurate about what
+                               upstream publishes, which is not what we build.
+  script/release/**            Electron's release uploaders. build.sh has its
+                               own package(), which is where the ia32 naming
+                               they describe is handled instead.
+  fix_disable_mold_for_linux_arm32.patch, and the Linux-arm32 half of
+  build_fix_profile_runtime_resolution_for_pgo_instrumented_builds.patch
+                               Linux ARM32, the other platform that commit
+                               dropped. Not a target here. (The Windows
+                               cross-compile half of that PGO patch survived
+                               upstream and we rely on it.)
+
+Restored:
+
+  script/lib/config.py         get_target_arch() mapping x86 -> ia32, the
+                               architecture string every Electron download
+                               resolver derives from process.arch. Without it
+                               Electron's own tooling names 32-bit artifacts
+                               win32-x86, which nothing looks for.
+  script/zip_manifests/dist_zip.win.x86.manifest
+  script/zip_manifests/chromedriver_zip.win.x86.manifest
+                               the expected contents of both 32-bit zips,
+                               restored verbatim from the commit. Note they
+                               differ from the x64 manifests only by dropping
+                               dxil.dll and dxcompiler.dll. Only
+                               script/zip_manifests/check-zip-manifest.py reads
+                               these, and only .github/actions/build-electron
+                               runs it, so the build never consults them -- they
+                               are here so that check can be run at all, and as
+                               the record of what a correct 32-bit zip holds.
+
+Nothing in the GN build had to be restored: #51816 never touched it, and the
+32-bit code paths are all still there -- electron/BUILD.gn still sets
+/STACK:0x80000 for current_cpu == "x86" (the fiber workaround for Chrome's
+1.5 MiB main-thread stack), and //build/config/compiler/pgo/BUILD.gn still
+resolves an Electron PGO target named win-x86. That last one is a dangling
+branch: no win-x86.pgo.txt was ever published, so gn gen for x86 dies reading
+it. assets/args/release_x86.gn sets chrome_pgo_phase = 0 to opt out, which is
+the one way a 32-bit build is not simply a 64-bit build with another target_cpu.
+
+diff --git a/electron/script/lib/config.py b/electron/script/lib/config.py
+index a05fe1c..23fec07 100644
+--- a/electron/script/lib/config.py
++++ b/electron/script/lib/config.py
+@@ -27,6 +27,8 @@
+   arch = os.environ.get('TARGET_ARCH')
+   if arch is None:
+     return 'x64'
++  if arch == 'x86':
++    return 'ia32'
+   return arch
+ 
+ def set_verbose_mode(mode):
+diff --git a/electron/script/zip_manifests/dist_zip.win.x86.manifest b/electron/script/zip_manifests/dist_zip.win.x86.manifest
+new file mode 100644
+index 0000000..a6e1a8e
+--- /dev/null
++++ b/electron/script/zip_manifests/dist_zip.win.x86.manifest
+@@ -0,0 +1,71 @@
++LICENSE
++LICENSES.chromium.html
++chrome_100_percent.pak
++chrome_200_percent.pak
++d3dcompiler_47.dll
++electron.exe
++ffmpeg.dll
++icudtl.dat
++locales/af.pak
++locales/am.pak
++locales/ar.pak
++locales/bg.pak
++locales/bn.pak
++locales/ca.pak
++locales/cs.pak
++locales/da.pak
++locales/de.pak
++locales/el.pak
++locales/en-GB.pak
++locales/en-US.pak
++locales/es-419.pak
++locales/es.pak
++locales/et.pak
++locales/fa.pak
++locales/fi.pak
++locales/fil.pak
++locales/fr.pak
++locales/gu.pak
++locales/he.pak
++locales/hi.pak
++locales/hr.pak
++locales/hu.pak
++locales/id.pak
++locales/it.pak
++locales/ja.pak
++locales/kn.pak
++locales/ko.pak
++locales/lt.pak
++locales/lv.pak
++locales/ml.pak
++locales/mr.pak
++locales/ms.pak
++locales/nb.pak
++locales/nl.pak
++locales/pl.pak
++locales/pt-BR.pak
++locales/pt-PT.pak
++locales/ro.pak
++locales/ru.pak
++locales/sk.pak
++locales/sl.pak
++locales/sr.pak
++locales/sv.pak
++locales/sw.pak
++locales/ta.pak
++locales/te.pak
++locales/th.pak
++locales/tr.pak
++locales/uk.pak
++locales/ur.pak
++locales/vi.pak
++locales/zh-CN.pak
++locales/zh-TW.pak
++resources.pak
++resources/default_app.asar
++snapshot_blob.bin
++vk_swiftshader_icd.json
++vk_swiftshader.dll
++vulkan-1.dll
++v8_context_snapshot.bin
++version
+diff --git a/electron/script/zip_manifests/chromedriver_zip.win.x86.manifest b/electron/script/zip_manifests/chromedriver_zip.win.x86.manifest
+new file mode 100644
+index 0000000..994983c
+--- /dev/null
++++ b/electron/script/zip_manifests/chromedriver_zip.win.x86.manifest
+@@ -0,0 +1,10 @@
++chromedriver.exe
++icudtl.dat
++ffmpeg.dll
++d3dcompiler_47.dll
++vk_swiftshader.dll
++vk_swiftshader_icd.json
++vulkan-1.dll
++gen/electron/buildflags/buildflags.h
++LICENSE
++LICENSES.chromium.html

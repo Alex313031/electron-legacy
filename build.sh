@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.5"
+SCRIPTVER="1.2.6"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -40,6 +40,14 @@ LOG_FILE="$ROOT_PATH/build.log"
 
 # Where to put finalized distribution .zips
 DIST_PATH="$ROOT_PATH/dist"
+
+# Where --npm assembles the `electron` npm package. Unlike dist/ this lives in
+# the repo, not under ROOT_PATH: it is a handful of small files meant to be
+# committed and tagged, not build output.
+NPM_PATH="$HERE/npm_package"
+
+# Files --npm takes from this repo rather than from the checkout.
+NPM_ASSETS="$HERE/assets/npm"
 
 # Set Electron source URL
 ELECTRON_URL="https://github.com/electron/electron.git"
@@ -112,6 +120,7 @@ JOBS=""
 IS_DEBUG=false
 DO_DEPS=false
 DO_PACKAGE=false
+DO_NPM=false
 DO_CLEAN=false
 DO_SYNC=false
 ONLY_DOWNLOAD=false
@@ -151,6 +160,10 @@ Options:
                               Passed as -j, plus SISO_LIMITS when Siso drives
                               the build. Without it autoninja picks CPUs + 2.
   --package                   Package built binaries into dist/ for distribution.
+  --npm                       Assemble the electron npm package into npm_package/
+                              from the patched src/electron/npm sources and what
+                              --package left in dist/. Needs no arch; run it
+                              after --package.
   -d, --download-sources      Only download sources, then exit; for making local modifications.
                               Discards any local changes in src/ (it resets to v$ELECTRON_VERSION).
   -p, --patch                 Only apply patches to already-downloaded sources, then exit; needs no arch.
@@ -337,6 +350,7 @@ parse_args() {
         JOBS="$2"; shift ;;
       -j*) JOBS="${1#-j}" ;;
       --package) DO_PACKAGE=true ;;
+      --npm) DO_NPM=true ;;
       -d|--download-sources) ONLY_DOWNLOAD=true ;;
       -p|--patch) ONLY_PATCH=true ;;
       -s|--sync) DO_SYNC=true ;;
@@ -983,6 +997,37 @@ package() {
   log "${GRE} Packaged into %s and %s${c0}\n" "$dest" "$headers"
 }
 
+npm_package() {
+  # Stage the `electron` npm package in npm_package/, ready to commit and tag.
+  #
+  # Its sources are src/electron/npm, patched by other/09-npm-package.patch to
+  # point at our releases -- so the customisation is reviewed as a patch like
+  # everything else, and this only copies. The rest are the files upstream
+  # injects when it publishes, which for us come out of the build: the version,
+  # the checksums, electron.d.ts and the ABI.
+  #
+  # Arch independent on purpose. The package describes every zip in dist/, and
+  # dist/ accumulates arches across runs (package() hashes whatever is there),
+  # so packaging x64 and x86 before running this gives one package serving both.
+  [ -d "$ELECTRON_PATH/npm" ] \
+      || error_exit "No $ELECTRON_PATH/npm, run '$SCRIPTNAME -d' first"
+  [ -d "$DIST_PATH/v$ELECTRON_VERSION" ] \
+      || error_exit "No $DIST_PATH/v$ELECTRON_VERSION, run '$SCRIPTNAME <arch> --package' first"
+
+  log "${CYA} Assembling npm package in %s${c0}\n" "$NPM_PATH"
+  # VERBOSE=1: the summary it prints is the point of running it.
+  VERBOSE=1 execute "" "Unable to assemble the npm package" \
+      py "$HERE/tools/make_npm_package.py" \
+      --npm-src "$ELECTRON_PATH/npm" \
+      --license "$ELECTRON_PATH/LICENSE" \
+      --readme "$NPM_ASSETS/README.md" \
+      --dist "$DIST_PATH/v$ELECTRON_VERSION" \
+      --args-gn "$ELECTRON_PATH/build/args/all.gn" \
+      --out "$NPM_PATH" \
+      --version "$ELECTRON_VERSION"
+  log "${GRE} npm package ready in %s${c0}\n" "$NPM_PATH"
+}
+
 clean_out() {
   if [ -n "$ARCH" ]; then
     local d
@@ -1008,6 +1053,13 @@ main() {
 
   if [ "$DO_CLEAN" = true ]; then
     clean_out
+    exit 0
+  fi
+
+  # --npm on its own assembles from dist/, so it needs no arch, no toolchain and
+  # no build. With an arch it runs at the end instead, after --package.
+  if [ "$DO_NPM" = true ] && [ -z "$ARCH" ]; then
+    npm_package
     exit 0
   fi
 
@@ -1064,6 +1116,7 @@ main() {
   gen_out
   build_electron
   [ "$DO_PACKAGE" = true ] && package
+  [ "$DO_NPM" = true ] && npm_package
   log "${GRE}${bold} Done.${c0}\n"
 }
 

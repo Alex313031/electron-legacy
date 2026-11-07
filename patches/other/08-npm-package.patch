@@ -1,0 +1,84 @@
+Title: Point the npm package at this project's releases
+Origin: electron-legacy (this repo)
+
+src/electron/npm/ is the source of the `electron` npm package: index.js, cli.js,
+install.js and a package.json that upstream publishes with name, version and the
+rest injected at release time (there is no `npm publish` in the Electron repo
+any more; that moved to external tooling). build.sh --npm assembles npm_package/
+from these files, so customising the package means patching them here rather
+than hand-maintaining a copy.
+
+  npm/install.js    downloadArtifact() gains mirrorOptions. @electron/get
+                    otherwise resolves
+                      https://github.com/electron/electron/releases/download/
+                    and a consumer would get upstream's binaries from a package
+                    claiming to be ours. The URL it builds is
+                      ${mirror}v${version}/electron-v${version}-${platform}-${arch}.zip
+                    which is exactly the layout package() writes into dist/, so
+                    uploading dist/v<version>/*.zip as release assets on the
+                    matching tag is all it takes to serve it. mirrorVar() in
+                    @electron/get reads env and npm config *before* the value
+                    passed here, so ELECTRON_MIRROR and
+                    npm_config_electron_mirror still override it.
+
+  npm/package.json  the static half of what upstream injects at publish time:
+                    name, description, repository, license, author, keywords.
+                    Deliberately not version -- install.js reads that to build
+                    the download URL, so it has to track ELECTRON_VERSION, and
+                    --npm writes it when it assembles the package. Keeping the
+                    name as "electron" is what lets this drop into a
+                    package.json as a replacement: require('electron'), the
+                    electron bin, and anything resolving the electron package
+                    all keep working.
+
+Checksum verification is left on. upstream's install.js reads ./checksums.json,
+and --npm generates it from the SHASUMS256.txt that package() already writes,
+so there is no reason to disable it.
+
+diff --git a/electron/npm/install.js b/electron/npm/install.js
+index 1d0f702..b9abbd7 100644
+--- a/electron/npm/install.js
++++ b/electron/npm/install.js
+@@ -9,6 +9,14 @@
+ 
+ const { version } = require('./package');
+ 
++// Where the release zips live. @electron/get builds
++// `${mirror}v${version}/electron-v${version}-${platform}-${arch}.zip`, which is
++// the layout build.sh's package() writes into dist/ and that these releases are
++// uploaded with. Env and npm config are read ahead of this value (see
++// mirrorVar() in @electron/get), so a consumer can redirect it with
++// ELECTRON_MIRROR or npm_config_electron_mirror without editing anything.
++const LEGACY_MIRROR = 'https://github.com/Alex313031/electron-legacy/releases/download/';
++
+ const platformPath = getPlatformPath();
+ 
+ if (isInstalled()) {
+@@ -40,6 +48,7 @@
+ downloadArtifact({
+   version,
+   artifactName: 'electron',
++  mirrorOptions: { mirror: LEGACY_MIRROR },
+   force: process.env.force_no_cache === 'true',
+   cacheRoot: process.env.electron_config_cache,
+   checksums:
+diff --git a/electron/npm/package.json b/electron/npm/package.json
+index 23fc312..4597066 100644
+--- a/electron/npm/package.json
++++ b/electron/npm/package.json
+@@ -1,4 +1,15 @@
+ {
++  "name": "electron",
++  "description": "Electron for legacy Windows (7/8/8.1)",
++  "repository": "https://github.com/Alex313031/electron-legacy",
++  "license": "MIT",
++  "author": "Alex313031",
++  "keywords": [
++    "electron",
++    "windows7",
++    "windows8",
++    "legacy"
++  ],
+   "main": "index.js",
+   "types": "electron.d.ts",
+   "bin": {
