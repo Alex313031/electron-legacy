@@ -40,6 +40,18 @@ this series already depend on; only Electron's binding to it was gone.
                           and why. Left as notes so upstream's record of its own
                           decision stays intact.
 
+  spec/ts-smoke/electron/main.ts
+                          drops the `@ts-expect-error Removed API` above the
+                          isAeroGlassEnabled() call, which the docs entry above
+                          makes a lie: electron.d.ts declares the method again,
+                          the call type-checks, and tsc fails the build with
+                          TS2578 "Unused '@ts-expect-error' directive". Not a
+                          test-only concern -- the npm_action that generates
+                          electron.d.ts runs this type check, so the build stops
+                          at //electron:build_electron_definitions. Now a
+                          console.log of the result, matching the getColor line
+                          above it.
+
 diff --git a/electron/docs/api/system-preferences.md b/electron/docs/api/system-preferences.md
 index 605c7f4c94..d02a7699ce 100644
 --- a/electron/docs/api/system-preferences.md
@@ -53,7 +65,7 @@ index 605c7f4c94..d02a7699ce 100644
 +Returns `boolean` - `true` if [DWM composition][dwm-composition] (Aero Glass) is
 +enabled, and `false` otherwise.
 +
-+Upstream Electron removed this in v37, because it always returned `true` from
++Upstream Electron removed this in v36, because it always returned `true` from
 +v23 onward: it required Windows 10, where DWM composition cannot be disabled.
 +This build runs on Windows 7, 8 and 8.1, where it can be, so the method is
 +meaningful again.
@@ -153,3 +165,17 @@ index 8ceb44be3e..6c019d2b01 100644
  ## Breaking API Changes (34.0)
  
  ### Behavior Changed: menu bar will be hidden during fullscreen on Windows
+diff --git a/electron/spec/ts-smoke/electron/main.ts b/electron/spec/ts-smoke/electron/main.ts
+index b7de87d96e..af91dbbdaa 100644
+--- a/electron/spec/ts-smoke/electron/main.ts
++++ b/electron/spec/ts-smoke/electron/main.ts
+@@ -383,8 +383,7 @@
+     console.log(highContrast ? 'high contrast' : 'not high contrast')
+   );
+   console.log('Color for menu is', systemPreferences.getColor('menu'));
+-  // @ts-expect-error Removed API
+-  systemPreferences.isAeroGlassEnabled();
++  console.log('Aero Glass enabled:', systemPreferences.isAeroGlassEnabled());
+ }
+ 
+ if (process.platform === 'darwin') {
