@@ -1,0 +1,166 @@
+Title: Port the restored D3D9 backend to ANGLE's current D3D interfaces
+Origin: electron-legacy (this repo)
+
+Applied from src/ after the chromium/ series, so it can adjust what those
+restore. chromium/third_party/angle/0003 through 0005 revert ANGLE's removal of
+the Direct3D 9 renderer, which matters here because D3D9 is the fallback on the
+old GPUs these builds target. ANGLE kept developing its shared D3D code after
+deleting that backend, though, and nothing was left to notice when the shared
+base classes grew requirements the D3D9 subclasses do not meet. It compiled at
+Electron 44.2.0 and stopped at 44.10.2, when the ANGLE roll brought the three
+changes below; Renderer9.cpp failed with "allocating an object of abstract class
+type" for Image9 and every TextureStorage9 subclass.
+
+  d3d/TextureD3D.h        restores the public hasDirtyImages() getter beside
+                          resetDirty(). Both the member (mDirtyImages) and
+                          resetDirty() still exist; only the getter went, since
+                          upstream's remaining caller is StateManager11, which
+                          resets the flag without reading it. Renderer9 reads it
+                          to decide whether to force-set the texture after an
+                          image update, so dropping the call instead would have
+                          silently changed what gets re-bound.
+
+  d3d9/TextureStorage9.h  TextureStorage gained four pure virtuals:
+  d3d9/TextureStorage9.cpp  getLevelWidth, getLevelHeight, getLevelDepth and
+                          getFormat. Implemented once on the TextureStorage9
+                          base rather than on each of _2D, _Cube and _EGLImage,
+                          which is possible because mTextureWidth,
+                          mTextureHeight and mInternalFormat are already
+                          protected members there. The width and height mirror
+                          TextureStorage11's shift-and-clamp; depth is a
+                          constant 1, as the D3D9 backend has no 3D textures.
+
+  d3d9/Image9.h           ImageD3D gained pure virtual initializeContents, for
+  d3d9/Image9.cpp         robust resource initialisation. Mirrors Image11: lock
+                          the surface, run the format's dataInitializerFunction
+                          if it has one, and otherwise zero it. The zero path is
+                          the common one -- formatutils9 reads the initializer
+                          out of a sparse map and most formats get nullptr --
+                          and leaving it out would hand fresh textures whatever
+                          was in that memory. One memset covers the locked rows,
+                          which are contiguous at Pitch stride; the block-height
+                          division is for the DXT formats, which store a block
+                          row at a time.
+
+Verified by building third_party/angle/src/libANGLE/renderer/d3d:angle_d3d9_backend
+(143 targets, including the shared angle_d3d_shared TextureD3D.obj).
+
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/TextureD3D.h b/third_party/angle/src/libANGLE/renderer/d3d/TextureD3D.h
+index 8d0789d53b..852e964be5 100644
+--- a/third_party/angle/src/libANGLE/renderer/d3d/TextureD3D.h
++++ b/third_party/angle/src/libANGLE/renderer/d3d/TextureD3D.h
+@@ -42,6 +42,7 @@ class TextureD3D : public TextureImpl, public angle::ObserverInterface
+ 
+     angle::Result getNativeTexture(const gl::Context *context, TextureStorage **outStorage);
+ 
++    bool hasDirtyImages() const { return mDirtyImages; }
+     void resetDirty() { mDirtyImages = false; }
+ 
+     virtual ImageD3D *getImage(const gl::ImageIndex &index) const = 0;
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.cpp b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.cpp
+index c4e4688..6c16161 100644
+--- a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.cpp
++++ b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.cpp
+@@ -516,6 +516,47 @@
+     return angle::Result::Continue;
+ }
+ 
++angle::Result Image9::initializeContents(const gl::Context *context)
++{
++    // 3D textures are not supported by the D3D9 backend.
++    ASSERT(mDepth == 1);
++
++    Context9 *context9 = GetImplAs<Context9>(context);
++
++    RECT lockRect = {0, 0, mWidth, mHeight};
++    D3DLOCKED_RECT locked;
++    ANGLE_TRY(lock(context9, &locked, lockRect));
++
++    const d3d9::TextureFormat &d3dFormatInfo = d3d9::GetTextureFormatInfo(mInternalFormat);
++    if (d3dFormatInfo.dataInitializerFunction != nullptr)
++    {
++        d3dFormatInfo.dataInitializerFunction(mWidth, mHeight, mDepth,
++                                              static_cast<uint8_t *>(locked.pBits), locked.Pitch,
++                                              0);
++    }
++    else
++    {
++        // Only a handful of internal formats have an initializer (the ones whose
++        // storage has to spell out an opaque alpha); everything else just wants
++        // zeroes. Zeroing a whole pitch per row avoids per-format size maths, and
++        // the pitch is this surface's own row stride, so all of it is ours to
++        // write. Compressed formats store a block row at a time, hence the
++        // division.
++        const gl::InternalFormat &glFormatInfo = gl::GetSizedInternalFormatInfo(mInternalFormat);
++        const GLuint blockHeight =
++            glFormatInfo.compressed ? glFormatInfo.compressedBlockHeight : 1u;
++        const GLuint rows = (mHeight + blockHeight - 1) / blockHeight;
++
++        // The locked rows are contiguous at Pitch stride, so one memset covers
++        // them without any pointer arithmetic of our own.
++        memset(locked.pBits, 0, static_cast<size_t>(rows) * locked.Pitch);
++    }
++
++    unlock();
++
++    return angle::Result::Continue;
++}
++
+ angle::Result Image9::loadCompressedData(const gl::Context *context,
+                                          const gl::Box &area,
+                                          const void *input)
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.h b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.h
+index 80064aa..5fd4e0c 100644
+--- a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.h
++++ b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Image9.h
+@@ -76,6 +76,8 @@
+                                      const gl::Box &area,
+                                      const void *input) override;
+ 
++    angle::Result initializeContents(const gl::Context *context) override;
++
+     angle::Result copyFromTexStorage(const gl::Context *context,
+                                      const gl::ImageIndex &imageIndex,
+                                      TextureStorage *source) override;
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.cpp b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.cpp
+index 80f2008..73dbc75 100644
+--- a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.cpp
++++ b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.cpp
+@@ -93,6 +93,22 @@
+     return static_cast<int>(mMipLevels) - mTopLevel;
+ }
+ 
++int TextureStorage9::getLevelWidth(int mipLevel) const
++{
++    return std::max(static_cast<int>(mTextureWidth) >> mipLevel, 1);
++}
++
++int TextureStorage9::getLevelHeight(int mipLevel) const
++{
++    return std::max(static_cast<int>(mTextureHeight) >> mipLevel, 1);
++}
++
++int TextureStorage9::getLevelDepth(int mipLevel) const
++{
++    // 2D and cube storage only; the D3D9 backend has no 3D textures.
++    return 1;
++}
++
+ bool TextureStorage9::isMultiplanar(const gl::Context *context)
+ {
+     // D3D9 does not support multiplanar formats yet.
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.h b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.h
+index 2fa7548..fba8487 100644
+--- a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.h
++++ b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/TextureStorage9.h
+@@ -46,6 +46,10 @@
+     bool isManaged() const override;
+     bool supportsNativeMipmapFunction() const override;
+     int getLevelCount() const override;
++    int getLevelWidth(int mipLevel) const override;
++    int getLevelHeight(int mipLevel) const override;
++    int getLevelDepth(int mipLevel) const override;
++    GLenum getFormat() const override { return mInternalFormat; }
+     bool isMultiplanar(const gl::Context *context) override;
+ 
+     angle::Result setData(const gl::Context *context,

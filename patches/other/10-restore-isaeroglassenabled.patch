@@ -1,0 +1,155 @@
+Title: Restore systemPreferences.isAeroGlassEnabled()
+Origin: electron-legacy (this repo)
+
+Deprecated in Electron 35 and removed in 36, on the grounds that it had returned
+a constant `true` ever since v23 required Windows 10, where DWM composition
+cannot be disabled. That reasoning does not apply to this build: it runs on
+Windows 7, 8 and 8.1, where composition can be switched off, so the function
+answers a real question again -- notably "will a transparent window work", which
+is what callers used it for.
+
+Nothing of Chromium's had to be restored for this. ui::win::IsAeroGlassEnabled
+survives in ui/base/win/shell.h via chromium/ui/0162, which several patches in
+this series already depend on; only Electron's binding to it was gone.
+
+  shell/browser/api/electron_api_system_preferences.h
+                          declares IsAeroGlassEnabled() in the existing IS_WIN
+                          block.
+  .../electron_api_system_preferences_win.cc
+                          one-line implementation, plus the ui/base/win/shell.h
+                          include it needs.
+  .../electron_api_system_preferences.cc
+                          registers "isAeroGlassEnabled" under its own
+                          BUILDFLAG(IS_WIN) guard. The nearby block is
+                          IS_WIN || IS_MAC, which this cannot join: there is no
+                          macOS implementation to bind.
+
+  docs/api/system-preferences.md
+                          the API reference entry. Not cosmetic -- package()
+                          runs create-typescript-definitions over docs/, so this
+                          entry is what puts isAeroGlassEnabled() into the
+                          electron.d.ts that ships in the npm package. Without
+                          it the method exists at runtime but not for
+                          TypeScript. The example is deliberately simpler than
+                          upstream's old one, which needed a @ts-expect-error
+                          annotation pinned to a line number.
+
+  docs/breaking-changes.md
+                          notes on both entries -- the 35.0 deprecation and the
+                          36.0 removal -- saying the function is restored here
+                          and why. Left as notes so upstream's record of its own
+                          decision stays intact.
+
+diff --git a/electron/docs/api/system-preferences.md b/electron/docs/api/system-preferences.md
+index 605c7f4c94..d02a7699ce 100644
+--- a/electron/docs/api/system-preferences.md
++++ b/electron/docs/api/system-preferences.md
+@@ -197,6 +197,29 @@ const alpha = color.substr(6, 2) // "dd"
+ 
+ This API is only available on macOS 10.14 Mojave or newer.
+ 
++### `systemPreferences.isAeroGlassEnabled()` _Windows_
++
++Returns `boolean` - `true` if [DWM composition][dwm-composition] (Aero Glass) is
++enabled, and `false` otherwise.
++
++Upstream Electron removed this in v37, because it always returned `true` from
++v23 onward: it required Windows 10, where DWM composition cannot be disabled.
++This build runs on Windows 7, 8 and 8.1, where it can be, so the method is
++meaningful again.
++
++Use it to decide whether a transparent window is worth asking for: transparency
++does not work correctly while DWM composition is disabled.
++
++```js
++const { BrowserWindow, systemPreferences } = require('electron')
++
++const win = new BrowserWindow({
++  transparent: systemPreferences.isAeroGlassEnabled()
++})
++```
++
++[dwm-composition]: https://learn.microsoft.com/en-us/windows/win32/dwm/composition-ovw#disabling-dwm-composition-windows7-and-earlier
++
+ ### `systemPreferences.getColor(color)` _Windows_ _macOS_
+ 
+ * `color` string - One of the following values:
+diff --git a/electron/shell/browser/api/electron_api_system_preferences.cc b/electron/shell/browser/api/electron_api_system_preferences.cc
+index 52ac57acd0..17b6b0d902 100644
+--- a/electron/shell/browser/api/electron_api_system_preferences.cc
++++ b/electron/shell/browser/api/electron_api_system_preferences.cc
+@@ -95,6 +95,10 @@ gin::ObjectTemplateBuilder SystemPreferences::GetObjectTemplateBuilder(
+                  &SystemPreferences::GetMediaAccessStatus)
+ #endif
+ 
++#if BUILDFLAG(IS_WIN)
++      .SetMethod("isAeroGlassEnabled", &SystemPreferences::IsAeroGlassEnabled)
++#endif
++
+ #if BUILDFLAG(IS_MAC)
+       .SetMethod("postNotification", &SystemPreferences::PostNotification)
+       .SetMethod("subscribeNotification",
+diff --git a/electron/shell/browser/api/electron_api_system_preferences.h b/electron/shell/browser/api/electron_api_system_preferences.h
+index 459545e8db..f27fe26de1 100644
+--- a/electron/shell/browser/api/electron_api_system_preferences.h
++++ b/electron/shell/browser/api/electron_api_system_preferences.h
+@@ -72,6 +72,10 @@ class SystemPreferences final
+                                    const std::string& media_type);
+ #endif
+ #if BUILDFLAG(IS_WIN)
++  // Removed upstream once Electron required Windows 10, where DWM composition
++  // cannot be disabled. It can be on the systems this build targets.
++  bool IsAeroGlassEnabled();
++
+   void InitializeWindow();
+ 
+   // Called by `hwnd_subscription_`.
+diff --git a/electron/shell/browser/api/electron_api_system_preferences_win.cc b/electron/shell/browser/api/electron_api_system_preferences_win.cc
+index 7a54d4cc7c..8ead24d328 100644
+--- a/electron/shell/browser/api/electron_api_system_preferences_win.cc
++++ b/electron/shell/browser/api/electron_api_system_preferences_win.cc
+@@ -17,6 +17,7 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "shell/common/color_util.h"
+ #include "shell/common/process_util.h"
++#include "ui/base/win/shell.h"
+ #include "ui/color/win/accent_color_observer.h"
+ #include "ui/gfx/win/singleton_hwnd.h"
+ 
+@@ -73,6 +74,10 @@ std::string ConvertDeviceAccessStatus(DeviceAccessStatus value) {
+ 
+ namespace api {
+ 
++bool SystemPreferences::IsAeroGlassEnabled() {
++  return ui::win::IsAeroGlassEnabled();
++}
++
+ std::string SystemPreferences::GetAccentColor() {
+   const std::optional<SkColor> color =
+       ui::AccentColorObserver::Get()->accent_color();
+diff --git a/electron/docs/breaking-changes.md b/electron/docs/breaking-changes.md
+index 8ceb44be3e..6c019d2b01 100644
+--- a/electron/docs/breaking-changes.md
++++ b/electron/docs/breaking-changes.md
+@@ -759,6 +763,10 @@ It has been always returning `true` since Electron 23, which only supports Windo
+ 
+ https://learn.microsoft.com/en-us/windows/win32/dwm/composition-ovw#disabling-dwm-composition-windows7-and-earlier
+ 
++> **Note:** this build restores the function, because its premise does not hold
++> here. It runs on Windows 7, 8 and 8.1, where DWM composition can be disabled,
++> so the return value is meaningful rather than always `true`.
++
+ ### Changed: GTK 4 is default when running GNOME
+ 
+ After an [upstream change](https://chromium-review.googlesource.com/c/chromium/src/+/6310469), GTK 4 is now the default when running GNOME.
+@@ -861,6 +869,10 @@ It has been always returning `true` since Electron 23, which only supports Windo
+ 
+ https://learn.microsoft.com/en-us/windows/win32/dwm/composition-ovw#disabling-dwm-composition-windows7-and-earlier
+ 
++> **Note:** this build restores the function, because its premise does not hold
++> here. It runs on Windows 7, 8 and 8.1, where DWM composition can be disabled,
++> so the return value is meaningful rather than always `true`.
++
+ ## Breaking API Changes (34.0)
+ 
+ ### Behavior Changed: menu bar will be hidden during fullscreen on Windows

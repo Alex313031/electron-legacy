@@ -1028,7 +1028,7 @@ build_electron() {
   log "${CYA} Building Electron (%s) for %s using %s jobs${c0}\n" "$config" "$ARCH" "$JOBS"
   local targets=(electron)
   if [ "$DO_PACKAGE" = true ]; then
-    targets=(electron:electron_dist_zip electron:electron_mksnapshot_zip
+    targets=(electron electron:electron_dist_zip electron:electron_mksnapshot_zip
              electron:electron_chromedriver_zip electron:node_headers)
   fi
   autoninja -C "$(out_dir)" "${targets[@]}"

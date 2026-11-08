@@ -1,1 +1,86 @@
 Modifys the default_app asar with custom branding
+
+diff --git a/electron/default_app/default_app.ts b/electron/default_app/default_app.ts
+index 443c9c2f00..b6b1f57fea 100644
+--- a/electron/default_app/default_app.ts
++++ b/electron/default_app/default_app.ts
+@@ -27,13 +27,13 @@ app.whenReady().then(() => {
+         label: 'Documentation',
+         click: async () => {
+           const version = process.versions.electron;
+-          await shell.openExternal(`https://github.com/electron/electron/tree/v${version}/docs#readme`);
++          await shell.openExternal(`https://github.com/Alex313031/electron-legacy/tree/v${version}-src#readme`);
+         }
+       },
+       {
+         label: 'Search Issues',
+         click: async () => {
+-          await shell.openExternal('https://github.com/electron/electron/issues');
++          await shell.openExternal('https://github.com/Alex313031/electron-legacy/issues');
+         }
+       }
+     ]
+diff --git a/electron/default_app/index.html b/electron/default_app/index.html
+index 5ac92e4fb8..ef97def3ac 100644
+--- a/electron/default_app/index.html
++++ b/electron/default_app/index.html
+@@ -1,7 +1,10 @@
++<!DOCTYPE html>
+ <html lang="en">
+ 
+ <head>
+-  <title>Electron</title>
++  <meta charset="utf-8">
++  <title>Electron Legacy</title>
++  <meta name="viewport" content="width=device-width, initial-scale=1">
+   <meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types electron-default-app" />
+   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-6PH54BfkNq/EMMhUY7nhHf3c+AxloOwfy7hWyT01CM8='; style-src 'self'; img-src 'self'; connect-src 'self'" />
+   <link href="./styles.css" type="text/css" rel="stylesheet" />
+@@ -59,7 +62,7 @@
+         </a>
+       </div>
+       <div class="linkcol">
+-        <a class="hero-link" target="_blank" href="https://github.com/electron/electron">
++        <a class="hero-link" target="_blank" href="https://github.com/Alex313031/electron-legacy">
+           <span class="octicon hero-octicon octicon-mark-github-16" aria-hidden="true"></span>
+           <h4>Repository</h4>
+         </a>
+@@ -89,4 +92,4 @@
+   </script>
+ </body>
+ 
+-</html>
+\ No newline at end of file
++</html>
+diff --git a/electron/default_app/package.json b/electron/default_app/package.json
+index 65fee98c59..2f6a9e701a 100644
+--- a/electron/default_app/package.json
++++ b/electron/default_app/package.json
+@@ -1,6 +1,10 @@
+ {
+   "name": "electron",
+   "productName": "Electron",
++  "license": "MIT",
++  "author": "Alex313031",
++  "copyright": "Copyright © 2026 Alex313031 and the Electron authors",
++  "repository": "https://github.com/Alex313031/electron-legacy",
+   "main": "main.js",
+   "type": "module"
+ }
+diff --git a/electron/default_app/preload.ts b/electron/default_app/preload.ts
+index ed5b0d0098..5730713da1 100644
+--- a/electron/default_app/preload.ts
++++ b/electron/default_app/preload.ts
+@@ -53,10 +53,10 @@ async function initialize() {
+   replaceText('.chrome-version', `Chromium v${process.versions.chrome}`, 'https://developer.chrome.com/docs/chromium');
+   replaceText(
+     '.node-version',
+-    `Node v${process.versions.node}`,
++    `NodeJS v${process.versions.node}`,
+     `https://nodejs.org/docs/v${process.versions.node}/api`
+   );
+-  replaceText('.v8-version', `v8 v${process.versions.v8}`, 'https://v8.dev/docs');
++  replaceText('.v8-version', `V8 v${process.versions.v8}`, 'https://v8.dev/docs');
+   replaceText('.command-example', `${electronPath} path-to-app`);
+ 
+   for (const element of document.querySelectorAll<HTMLSpanElement>('.octicon')) {
