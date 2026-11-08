@@ -1,4 +1,5 @@
 01-disable-redraw-lock-dropped-from-electron-restored.patch
+02-optimization-and-SIMD-args.patch
 03-win32_cross_build.patch
 04-pre-CR23_UI.patch
 05-default_app_changes.patch

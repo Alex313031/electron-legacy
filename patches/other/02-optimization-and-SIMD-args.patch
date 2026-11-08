@@ -1,1 +1,628 @@
-Adds extra compiler optimization flags, as well as SIMD flags tunable by GN args.
+Title: Extra compiler optimization flags, plus SIMD flags tunable by GN args
+Origin: Thorium (https://github.com/Alex313031/thorium), ported
+
+Two independent knobs:
+
+  is_full_optimization_build   clang -O3 instead of -O2, O2 ThinLTO with CGO3
+                               in the link step, and a set of -mllvm passes.
+                               Defaults to is_official_build, as in Thorium, so
+                               the release builds assets/args/ describes get it
+                               and a debug or developer build does not. The
+                               binaries are around 40% larger.
+  electron_x86_profile         the ISA baseline target code may assume, "none"
+                               through "avx512_skx", each level carrying its
+                               own -mtune and -ffp-contract policy. Defaults
+                               follow Thorium: sse2 on x86, sse3 on x64, which
+                               is also what Chromium itself assumes on x64.
+
+The 32-bit default is about correctness here rather than speed.
+patches/chromium/build/0221-require-sse3-on-x86-platforms.patch lowers
+Chromium's x86 baseline back to SSE2 for the pre-SSE3 machines these builds
+exist to support, so an x86 profile of sse3 or above would quietly undo it.
+
+  build/config/compiler_opt.gni      new. Declares both args, validates the
+                                     profile against the target, and expands it
+                                     into the cflag/rustflag lists the configs
+                                     below consume.
+  build/config/BUILDCONFIG.gn        declares electron_x86_profile with its
+                                     per-arch default -- it has to be set here
+                                     rather than in compiler_opt.gni because
+                                     toolchain files override it in
+                                     toolchain_args, which cannot reference a
+                                     .gni the toolchain does not import --
+                                     appends :electron_x86_isa to
+                                     default_compiler_configs, and redirects
+                                     host_toolchain for the AVX-512 case below.
+  build/config/compiler/BUILD.gn     the configs. :electron_x86_isa holds the
+                                     ISA flags and applies to all target code;
+                                     :electron_x86_tune and :electron_arm_tune
+                                     hold tuning and hang off
+                                     :compiler_codegen, which is where
+                                     Chromium keeps flags that only affect code
+                                     generation. Plus the -ffp-contract hook in
+                                     :compiler, the two thinlto_optimize_* link
+                                     policies, and -O3 in :optimize and
+                                     :optimize_max.
+  build/toolchain/linux/BUILD.gn     clang_x64_electron_build_host.
+  build/toolchain/gcc_toolchain.gni  pins the Rust host build tools toolchain
+                                     to profile "none"; it builds code that
+                                     runs during the build.
+  electron/BUILD.gn                  electron_lib on optimize_max.
+
+Host ISA. Anything executed during the build -- mksnapshot, protoc, the
+snapshot generator -- runs on the build machine, so it must not be handed
+features that machine lacks. A cross build gets this for free: those tools are
+compiled in the Linux host toolchain, whose current_os does not match
+target_os, so is_a_target_toolchain is false and no profile flags reach them.
+In a native build host_toolchain is the default toolchain and that distinction
+disappears, which is why avx512_skx on Linux x64 routes host_toolchain to a
+separate baseline toolchain. Below AVX-512 a native build does compile
+build-time tools with the profile's flags, on the assumption that a machine
+asked to target itself can run the result. A native Windows build has no
+equivalent redirect, so avx512_skx there needs an AVX-512 builder.
+
+Not carried over from Thorium's version of this change:
+
+  is_thorium_build             a brand flag, with nothing to gate here.
+  thorium_* identifiers        renamed electron_*.
+  -w and -Awarnings            Thorium silences every compiler and rustc
+                               warning. Not a decision to inherit silently.
+  copyright header rewrites    Thorium restamps the files it touches.
+  /OPT:LLDTAILMERGE, /PROFILE  linker flags unrelated to either knob.
+  required_cpu_features, and the installer and package name labels
+                               Thorium's own packaging.
+  the -msse3 removals in build/config/compiler_cpu_abi.gn and
+  build/config/win/BUILD.gn    the same x86 baseline change patch 0221 above
+                               already makes, differently.
+
+Two things this does that Thorium did not:
+
+  config("optimize")   Thorium raised :optimize_max to -O3 and left :optimize
+                       alone, but default_optimization resolves to :optimize,
+                       so nearly the whole tree kept clang-cl's explicit
+                       /clang:-O2 -- the one flag the knob exists to drop.
+                       is_full_optimization_build now reaches there too. This
+                       was a bug on Thorium's side, fixed there as well.
+  electron_lib         swaps default_optimization for optimize_max, so
+                       Electron's own C++ is compiled for speed rather than
+                       inheriting whatever the rest of the tree gets.
+
+diff --git a/build/config/compiler_opt.gni b/build/config/compiler_opt.gni
+new file mode 100644
+index 0000000..5cb4433
+--- /dev/null
++++ b/build/config/compiler_opt.gni
+@@ -0,0 +1,183 @@
++# Copyright (c) 2026 Alex313031
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++#
++# Aggressive optimization and x86 SIMD tuning, ported from Thorium.
++#
++# is_full_optimization_build follows is_official_build, as it does in Thorium,
++# so the release builds this repo exists to produce get it and a local debug or
++# developer build does not.
++#
++# electron_x86_profile does apply by default, following Thorium: sse2 for x86
++# and sse3 for x64 (set in //build/config/BUILDCONFIG.gn). The 32-bit default
++# matters -- the win7 series lowers Chromium's x86 baseline back from SSE3 in
++# patches/chromium/build/0221-require-sse3-on-x86-platforms.patch, so raising
++# it here would undo that for the machines this build exists to support.
++#
++# The x64 default stays at Chromium's SSE3, since the only x64 CPUs without it
++# are pre-Venice K8s.
++
++import("//build/config/compiler/compiler.gni")
++import("//build/toolchain/toolchain.gni")
++
++declare_args() {
++  # Raise optimization above what Chromium ships: -O3 instead of -O2, O2
++  # ThinLTO with CGO3 in the link step, and a handful of LLVM passes. Faster
++  # and substantially larger. Set it to false for a release build that should
++  # match what upstream Electron would produce.
++  is_full_optimization_build = is_official_build
++
++  # Tune for the Raspberry Pi on Linux ARM64.
++  is_raspi = false
++}
++
++_x86_profile_platform =
++    is_win || is_linux || is_mac || is_android || is_chromeos || is_fuchsia
++
++_x86_profile_is_valid =
++    electron_x86_profile == "none" || electron_x86_profile == "sse2" ||
++    electron_x86_profile == "sse3" || electron_x86_profile == "sse4_1" ||
++    electron_x86_profile == "sse4_2" || electron_x86_profile == "avx" ||
++    electron_x86_profile == "avx_fma" || electron_x86_profile == "avx2" ||
++    electron_x86_profile == "avx2_fma" || electron_x86_profile == "avx512_skx"
++assert(_x86_profile_is_valid,
++       "Unsupported electron_x86_profile: " + electron_x86_profile)
++assert(electron_x86_profile == "none" || _x86_profile_platform,
++       "electron_x86_profile is not supported for this target platform")
++assert(electron_x86_profile == "none" || target_cpu == "x86" ||
++           target_cpu == "x64",
++       "electron_x86_profile requires an x86 or x64 target")
++
++if (is_debug) {
++  assert(!is_full_optimization_build,
++         "is_full_optimization_build only works with non-debug builds")
++}
++
++electron_x86_isa_cflags = []
++electron_x86_isa_rustflags = []
++electron_x86_tune_cflags = []
++electron_x86_tune_rustflags = []
++electron_x86_numeric_cflags = []
++electron_x86_numeric_rustflags = []
++
++_apply_x86_profile =
++    is_a_target_toolchain && !toolchain_for_rust_host_build_tools &&
++    _x86_profile_platform && (current_cpu == "x86" || current_cpu == "x64")
++
++# A ChromeOS device toolchain with an explicit -march owns its complete ISA.
++if (defined(cros_target_cpu_arch) && cros_target_cpu_arch != "") {
++  _apply_x86_profile = false
++}
++
++if (_apply_x86_profile) {
++  if (electron_x86_profile == "sse2") {
++    electron_x86_isa_cflags = [ "-msse2" ]
++    electron_x86_isa_rustflags = [ "-Ctarget-feature=+sse2" ]
++  } else if (electron_x86_profile == "sse3") {
++    electron_x86_isa_cflags = [ "-msse3" ]
++    electron_x86_isa_rustflags = [ "-Ctarget-feature=+sse3" ]
++  } else if (electron_x86_profile == "sse4_1") {
++    electron_x86_isa_cflags = [
++      "-msse3",
++      "-mssse3",
++      "-msse4.1",
++    ]
++    electron_x86_isa_rustflags = [ "-Ctarget-feature=+sse3,+ssse3,+sse4.1" ]
++    electron_x86_tune_cflags = [ "-mtune=core2" ]
++    electron_x86_tune_rustflags = [ "-Ztune-cpu=core2" ]
++  } else if (electron_x86_profile == "sse4_2") {
++    electron_x86_isa_cflags = [
++      "-msse3",
++      "-mssse3",
++      "-msse4.1",
++      "-msse4.2",
++    ]
++    electron_x86_isa_rustflags =
++        [ "-Ctarget-feature=+sse3,+ssse3,+sse4.1,+sse4.2" ]
++    electron_x86_tune_cflags = [ "-mtune=nehalem" ]
++    electron_x86_tune_rustflags = [ "-Ztune-cpu=nehalem" ]
++  } else if (electron_x86_profile == "avx") {
++    electron_x86_isa_cflags = [
++      "-msse3",
++      "-mavx",
++    ]
++    electron_x86_isa_rustflags = [ "-Ctarget-feature=+sse3,+avx,-fast-gather,+prefer-no-gather,+prefer-no-scatter" ]
++    electron_x86_tune_cflags = [
++      "-mtune=sandybridge",
++      "-mno-gather",
++      "-mno-scatter",
++    ]
++    electron_x86_tune_rustflags = [ "-Ztune-cpu=sandybridge" ]
++  } else if (electron_x86_profile == "avx_fma") {
++    electron_x86_isa_cflags = [
++      "-msse3",
++      "-mavx",
++      "-mfma",
++    ]
++    electron_x86_isa_rustflags = [ "-Ctarget-feature=+sse3,+avx,+fma,-fast-gather,+prefer-no-gather,+prefer-no-scatter" ]
++    electron_x86_tune_cflags = [
++      "-mtune=piledriver",
++      "-mno-gather",
++      "-mno-scatter",
++    ]
++    electron_x86_tune_rustflags = [ "-Ztune-cpu=bdver2" ]
++  } else if (electron_x86_profile == "avx2" ||
++             electron_x86_profile == "avx2_fma" ||
++             electron_x86_profile == "avx512_skx") {
++    electron_x86_isa_cflags = [
++      "-msse3",
++      "-mavx",
++      "-mavx2",
++    ]
++    _rust_target_features = "+sse3,+avx,+avx2"
++
++    if (electron_x86_profile == "avx2_fma" ||
++        electron_x86_profile == "avx512_skx") {
++      electron_x86_isa_cflags += [
++        "-mfma",
++        "-mf16c",
++      ]
++      _rust_target_features += ",+fma,+f16c"
++    }
++
++    if (electron_x86_profile == "avx512_skx") {
++      electron_x86_isa_cflags += [
++        "-mavx512f",
++        "-mavx512cd",
++        "-mavx512vl",
++        "-mavx512bw",
++        "-mavx512dq",
++      ]
++      _rust_target_features +=
++          ",+avx512f,+avx512cd,+avx512vl,+avx512bw,+avx512dq"
++      electron_x86_tune_cflags = [ "-mtune=skylake-avx512" ]
++      electron_x86_tune_rustflags = [ "-Ztune-cpu=skylake-avx512" ]
++    } else {
++      electron_x86_tune_cflags = [ "-mtune=skylake" ]
++      electron_x86_tune_rustflags = [ "-Ztune-cpu=skylake" ]
++    }
++
++    _rust_target_features +=
++        ",-fast-gather,+prefer-no-gather,+prefer-no-scatter"
++    electron_x86_isa_rustflags = [ "-Ctarget-feature=" + _rust_target_features ]
++    electron_x86_tune_cflags += [
++      "-mno-gather",
++      "-mno-scatter",
++    ]
++  }
++
++  # Contraction of a*b+c into an FMA changes results, so it is only allowed
++  # where the profile already requires an FMA-capable CPU.
++  _fp_contract = "off"
++  if (electron_x86_profile == "avx2_fma" ||
++      electron_x86_profile == "avx512_skx") {
++    _fp_contract = "fast"
++  }
++  if (is_win) {
++    electron_x86_numeric_cflags = [ "/clang:-ffp-contract=" + _fp_contract ]
++  } else {
++    electron_x86_numeric_cflags = [ "-ffp-contract=" + _fp_contract ]
++  }
++  electron_x86_numeric_rustflags =
++      [ "-Cllvm-args=-fp-contract=" + _fp_contract ]
++}
+diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
+index d26beee..0046d0d 100644
+--- a/build/config/BUILDCONFIG.gn
++++ b/build/config/BUILDCONFIG.gn
+@@ -175,6 +175,27 @@
+                        current_os != "ios" && current_os != "watchos"
+ }
+ 
++# Default x86 feature set, following Thorium: SSE2 on 32-bit, where the win7
++# series deliberately lowered Chromium's baseline back from SSE3, and SSE3 on
++# 64-bit, which practically every x64 CPU has -- only pre-Venice K8 Athlon 64
++# does not.
++_default_electron_x86_profile = "none"
++if (target_os == "win" || target_os == "linux" || target_os == "mac" ||
++    target_os == "android" || target_os == "chromeos" ||
++    target_os == "fuchsia") {
++  if (target_cpu == "x86") {
++    _default_electron_x86_profile = "sse2"
++  } else if (target_cpu == "x64") {
++    _default_electron_x86_profile = "sse3"
++  }
++}
++
++declare_args() {
++  # Minimum x86 CPU feature set for target code. See
++  # //build/config/compiler_opt.gni for the accepted values.
++  electron_x86_profile = _default_electron_x86_profile
++}
++
+ assert(!(is_debug && is_official_build), "Can't do official debug builds")
+ assert(!(current_os == "ios" && is_component_build),
+        "Can't use component build on iOS")
+@@ -225,7 +246,14 @@
+   # no toolchain omitted host_toolchain from its toolchain_args().
+ 
+   if (host_os == "linux") {
+-    if (target_os != "linux") {
++    if (target_os == "linux" && host_cpu == "x64" && target_cpu == "x64" &&
++        electron_x86_profile == "avx512_skx") {
++      # An AVX-512 target can be built on a host that does not implement
++      # AVX-512. Everything executed during the build -- mksnapshot, the V8
++      # snapshot generator, protoc and friends -- has to stay on a baseline
++      # host toolchain or it will fault on this machine.
++      host_toolchain = "//build/toolchain/linux:clang_x64_electron_build_host"
++    } else if (target_os != "linux") {
+       host_toolchain = "//build/toolchain/linux:clang_$host_cpu"
+     } else if (is_clang) {
+       host_toolchain = "//build/toolchain/linux:clang_$host_cpu"
+@@ -443,6 +471,10 @@
+   default_compiler_configs += [ "//build/config/zos:compiler" ]
+ }
+ 
++# Last, so the ISA requirement cannot be dropped by an earlier config. Empty
++# unless electron_x86_profile is set.
++default_compiler_configs += [ "//build/config/compiler:electron_x86_isa" ]
++
+ # Static libraries and source sets use only the compiler ones.
+ set_defaults("static_library") {
+   configs = default_compiler_configs
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+index 4af0e71..faf8048 100644
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -12,6 +12,7 @@
+ import("//build/config/clang/clang.gni")
+ import("//build/config/compiler/compiler.gni")
+ import("//build/config/compiler_cpu_abi.gn")
++import("//build/config/compiler_opt.gni")
+ import("//build/config/coverage/coverage.gni")
+ import("//build/config/cronet/config.gni")
+ import("//build/config/dcheck_always_on.gni")
+@@ -654,7 +655,10 @@
+     }
+ 
+     # TODO(crbug.com/40192287): Investigate why/if this should be needed.
+-    if (is_win) {
++    if (electron_x86_numeric_cflags != []) {
++      cflags += electron_x86_numeric_cflags
++      rustflags += electron_x86_numeric_rustflags
++    } else if (is_win) {
+       cflags += [ "/clang:-ffp-contract=off" ]
+     } else {
+       cflags += [ "-ffp-contract=off" ]
+@@ -817,6 +821,9 @@
+     # [1]: https://pinpoint-dot-chromeperf.appspot.com/job/11984a18be0000
+     # [2]: https://ci.chromium.org/ui/p/chromium/builders/try/android-binary-size/1848442
+     import_instr_limit = 30
++    if (is_full_optimization_build && is_mac) {
++      import_instr_limit = 100
++    }
+ 
+     if (is_win) {
+       ldflags += [
+@@ -1278,10 +1285,42 @@
+ # building with ThinLTO, no optimization is performed in the link step.
+ config("thinlto_optimize_default") {
+   if (!is_debug && use_thin_lto && is_a_target_toolchain) {
++    # Normally no optimization is performed in the link step.
++    # is_full_optimization_build raises x86 Windows and Linux links to O2 with
++    # CGO3; other platforms keep Chromium's default.
+     lto_opt_level = 0
++    _x86_thinlto =
++        is_full_optimization_build && thin_lto_enable_optimizations &&
++        (is_win || is_linux) && (current_cpu == "x86" || current_cpu == "x64")
++    if (_x86_thinlto) {
++      lto_opt_level = 2
++    }
+ 
+     if (is_win) {
+       ldflags = [ "/opt:lldlto=" + lto_opt_level ]
++      if (_x86_thinlto) {
++        ldflags += [
++          "-opt:lldltocgo=3",
++          "-mllvm:-adce-remove-loops=true",
++          "-mllvm:-x86-align-branch-boundary=32",
++          "-mllvm:-x86-align-branch=jcc+jmp+indirect",
++        ]
++      }
++    } else if (is_linux) {
++      ldflags = [ "-Wl,--lto-O" + lto_opt_level ]
++      if (_x86_thinlto && current_cpu == "x64" &&
++          electron_x86_profile == "avx512_skx") {
++        # SLP vectorization miscompiles at this ISA level.
++        ldflags += [ "-Wl,-mllvm,-vectorize-slp=false" ]
++      }
++      if (_x86_thinlto) {
++        ldflags += [
++          "-Wl,--lto-CGO3",
++          "-Wl,-mllvm,-adce-remove-loops=true",
++          "-Wl,-mllvm,-x86-align-branch-boundary=32",
++          "-Wl,-mllvm,-x86-align-branch=jcc+jmp+indirect",
++        ]
++      }
+     } else {
+       ldflags = [ "-Wl,--lto-O" + lto_opt_level ]
+     }
+@@ -1315,8 +1354,56 @@
+       lto_opt_level = 0
+     }
+ 
++    _x86_thinlto = is_full_optimization_build && lto_opt_level == 2 &&
++                   (current_cpu == "x86" || current_cpu == "x64")
+     if (is_win) {
+       ldflags = [ "/opt:lldlto=" + lto_opt_level ]
++      if (_x86_thinlto) {
++        ldflags += [
++          "-opt:lldltocgo=3",
++          "-mllvm:-import-hot-multiplier=15",
++          "-mllvm:-adce-remove-loops=true",
++          "-mllvm:-enable-gvn-hoist",
++          "-mllvm:-enable-gvn-sink",
++          "-mllvm:-machine-sink-split",
++          "-mllvm:-phi-node-folding-threshold=4",
++          "-mllvm:-sink-insts-to-avoid-spills",
++          "-mllvm:-spec-exec-max-speculation-cost=15",
++          "-mllvm:-x86-align-branch-boundary=32",
++          "-mllvm:-x86-align-branch=jcc+jmp+indirect",
++          "-mllvm:-x86-cmov-converter",
++        ]
++      }
++    } else if (is_linux) {
++      ldflags = [ "-Wl,--lto-O" + lto_opt_level ]
++      if (_x86_thinlto && current_cpu == "x64" &&
++          electron_x86_profile == "avx512_skx") {
++        ldflags += [ "-Wl,-mllvm,-vectorize-slp=false" ]
++      }
++      if (_x86_thinlto) {
++        ldflags += [
++          "-Wl,--lto-CGO3",
++          "-Wl,-mllvm,-import-hot-multiplier=15",
++          "-Wl,-mllvm,-adce-remove-loops=true",
++          "-Wl,-mllvm,-machine-sink-split",
++          "-Wl,-mllvm,-phi-node-folding-threshold=4",
++          "-Wl,-mllvm,-sink-insts-to-avoid-spills",
++          "-Wl,-mllvm,-spec-exec-max-speculation-cost=15",
++          "-Wl,-mllvm,-x86-align-branch-boundary=32",
++          "-Wl,-mllvm,-x86-align-branch=jcc+jmp+indirect",
++          "-Wl,-mllvm,-x86-cmov-converter",
++        ]
++
++        # LLVM can crash in correlated-propagation after the experimental GVN
++        # hoist/sink passes process Abseil's mutex implementation in an i386
++        # ThinLTO link, so 32-bit keeps the rest of the policy without them.
++        if (current_cpu != "x86") {
++          ldflags += [
++            "-Wl,-mllvm,-enable-gvn-hoist",
++            "-Wl,-mllvm,-enable-gvn-sink",
++          ]
++        }
++      }
+     } else {
+       ldflags = [ "-Wl,--lto-O" + lto_opt_level ]
+     }
+@@ -1353,7 +1440,10 @@
+ # for particular Chromium code or for working around particular
+ # compiler bugs (or the combination of the two).
+ config("compiler_codegen") {
+-  configs = []
++  configs = [
++    ":electron_x86_tune",
++    ":electron_arm_tune",
++  ]
+   cflags = []
+   ldflags = []
+ 
+@@ -2441,6 +2531,31 @@
+   }
+ }
+ 
++# The x86 ISA requirement applies to all target code, via
++# default_compiler_configs in BUILDCONFIG.gn. Tuning is separate and nested
++# under compiler_codegen; see the comment there.
++config("electron_x86_isa") {
++  cflags = electron_x86_isa_cflags
++  rustflags = electron_x86_isa_rustflags
++}
++
++config("electron_x86_tune") {
++  cflags = electron_x86_tune_cflags
++  rustflags = electron_x86_tune_rustflags
++}
++
++# ARM tuning, kept independent of the x86 profile system.
++config("electron_arm_tune") {
++  cflags = []
++  if (is_a_target_toolchain && current_cpu == "arm64") {
++    if (is_mac) {
++      cflags += [ "-mcpu=apple-m1" ]
++    } else if (is_linux && is_raspi) {
++      cflags += [ "-mtune=cortex-a72" ]
++    }
++  }
++}
++
+ # Optimization -----------------------------------------------------------------
+ #
+ # The BUILDCONFIG file sets the "default_optimization" config on targets by
+@@ -2591,11 +2706,16 @@
+ config("optimize") {
+   if (is_win) {
+     # clang-cl's /O2 corresponds to clang's -O3, and really want -O2 for
+-    # consistency with the other platforms.
+-    cflags = [
+-               "/O2",
+-               "/clang:-O2",
+-             ] + common_optimize_on_cflags
++    # consistency with the other platforms. is_full_optimization_build is the
++    # request to give that up and take clang's -O3.
++    cflags = [ "/O2" ]
++    if (is_full_optimization_build &&
++        (current_cpu == "x86" || current_cpu == "x64")) {
++      cflags += [ "/clang:-O3" ]
++    } else {
++      cflags += [ "/clang:-O2" ]
++    }
++    cflags += common_optimize_on_cflags
+ 
+     # The `-O3` for clang turns on extra optimizations compared to the standard
+     # `-O2`. But for rust, `-Copt-level=3` is the default and is thus reliable
+@@ -2625,6 +2745,9 @@
+     # Similar to clang, we optimize with `-Copt-level=s` to keep loop
+     # vectorization while otherwise optimizing for size.
+     rustflags = [ "-Copt-level=s" ]
++  } else if (is_full_optimization_build && (is_linux || is_mac || is_android)) {
++    cflags = [ "-O3" ] + common_optimize_on_cflags
++    rustflags = [ "-Copt-level=3" ]
+   } else {
+     cflags = [ "-O2" ] + common_optimize_on_cflags
+ 
+@@ -2677,9 +2800,17 @@
+   if (is_win) {
+     # Favor speed over size, /O2 must be before the common flags.
+     # /O2 implies /Ot, /Oi, and /GF.
+-    cflags = [ "/O2" ] + common_optimize_on_cflags
++    cflags = [ "/O2" ]
++    if (is_full_optimization_build &&
++        (current_cpu == "x86" || current_cpu == "x64")) {
++      cflags += [ "/clang:-O3" ]
++    }
++    cflags += common_optimize_on_cflags
+   } else if (optimize_for_fuzzing) {
+     cflags = [ "-O1" ] + common_optimize_on_cflags
++  } else if (is_full_optimization_build && (is_linux || is_mac || is_android)) {
++    cflags = [ "-O3" ] + common_optimize_on_cflags
++    ldflags += [ "-Wl,-O3" ]
+   } else {
+     cflags = [ "-O2" ] + common_optimize_on_cflags
+   }
+diff --git a/build/toolchain/gcc_toolchain.gni b/build/toolchain/gcc_toolchain.gni
+index 9c90e9a..e10a4a2 100644
+--- a/build/toolchain/gcc_toolchain.gni
++++ b/build/toolchain/gcc_toolchain.gni
+@@ -921,6 +921,7 @@
+     toolchain_args = {
+       # Populate toolchain args from the invoker.
+       forward_variables_from(invoker.toolchain_args, "*")
++      electron_x86_profile = "none"
+       toolchain_for_rust_host_build_tools = true
+ 
+       # The host build tools are static release builds to make the Chromium
+diff --git a/build/toolchain/linux/BUILD.gn b/build/toolchain/linux/BUILD.gn
+index a6e20a0..32cc505 100644
+--- a/build/toolchain/linux/BUILD.gn
++++ b/build/toolchain/linux/BUILD.gn
+@@ -114,6 +114,17 @@
+   }
+ }
+ 
++# Build-time executables run on the build host even when the target requires
++# AVX-512, so this stays at Chromium's x64 baseline. Referenced from
++# BUILDCONFIG.gn; see the comment there.
++clang_toolchain("clang_x64_electron_build_host") {
++  toolchain_args = {
++    current_cpu = "x64"
++    current_os = "linux"
++    electron_x86_profile = "none"
++  }
++}
++
+ template("clang_v8_toolchain") {
+   clang_toolchain(target_name) {
+     toolchain_args = {
+diff --git a/electron/BUILD.gn b/electron/BUILD.gn
+index e16dd09..9cfe1f5 100644
+--- a/electron/BUILD.gn
++++ b/electron/BUILD.gn
+@@ -1,3 +1,4 @@
++import("//build/config/compiler_opt.gni")
+ import("//build/config/locales.gni")
+ import("//build/config/ui.gni")
+ import("//build/config/win/manifest.gni")
+@@ -496,6 +497,18 @@
+     "//third_party/electron_node:node_external_config",
+   ]
+ 
++  if (is_full_optimization_build) {
++    # Electron's own C++ lives here, so this target decides how Electron
++    # itself is compiled. default_optimization resolves to
++    # //build/config/compiler:optimize, which favors size when
++    # optimize_for_size is set and otherwise lands on -O2; optimize_max always
++    # favors speed. Only the compile step needs this: electron_app, and
++    # electron_framework on macOS, already swap in thinlto_optimize_max, which
++    # is where the same flag adds CGO3 and the -mllvm set.
++    configs -= [ "//build/config/compiler:default_optimization" ]
++    configs += [ "//build/config/compiler:optimize_max" ]
++  }
++
+   public_configs = [
+     ":branding",
+     ":electron_lib_config",
