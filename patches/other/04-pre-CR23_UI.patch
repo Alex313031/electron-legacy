@@ -1,1 +1,190 @@
-Restores the better looking pre Chrome Refresh 2023 UI (mainly for menus/window metrics)
+Title: Restore the pre-Chrome-Refresh-2023 menu look
+Origin: electron-legacy (this repo), ported from Thorium
+Upstream-Source: electron-migrate/thorium-2024-ui-core.patch
+
+Chrome Refresh 2023 made menus large, round and widely spaced. That reads as
+native on macOS and as nothing at all on Windows, least of all Windows 7 and 8,
+where Electron apps are claiming to draw native menus. This restores the older
+metrics.
+
+Ported from Thorium rather than copied. Three differences, all deliberate:
+
+  * Unconditional, where Thorium gates everything on features::IsThorium2024().
+    The flag exists so Thorium can ship both looks; this build only wants one,
+    and carrying it would mean porting Thorium's ui_base_features hunks as well
+    for a switch nobody here would flip.
+
+  * Only the ui/ side. Of the 57 files Thorium's patch touches, 38 are under
+    chrome/browser and describe UI that Electron does not compile or display,
+    and three more are WebUI CSS for chrome:// pages Electron does not have.
+    The toggle_button, combobox, editable_combobox and tree_view changes are
+    Chrome-settings widgets that an Electron app never shows either.
+
+  * Restructured for Chromium 152. Thorium's GetCornerRadiusMetric hunk
+    switches on ShapeContextTokens directly; upstream now maps context tokens
+    to ShapeSysTokens first and switches on those, so the override had to move
+    to the top of the function.
+
+What each file does:
+
+  ui/views/layout/layout_provider.cc
+                          returns a zero radius for kMenuRadius and
+                          kMenuAuxRadius, which upstream maps to kMediumSmall
+                          (12px). This is the change that actually squares the
+                          menus off: MenuConfig::corner_radius and
+                          auxiliary_corner_radius are initialised from these
+                          tokens (see menu_config.h), so everything else
+                          follows. Not done by editing the token map, which has
+                          no "no radius" token -- kDefault means "missing
+                          mapping" and trips a DCHECK. kMenuTouchRadius stays
+                          rounded, as touch menus should be.
+
+  ui/views/controls/menu/menu_config.cc
+                          the cross-platform metrics in InitCommon(): tighter
+                          item margins and separators, no item horizontal
+                          border padding, and an outer border. Upstream's value
+                          is in a comment beside each one so the diff stays
+                          readable as a set of deltas.
+
+  ui/views/controls/menu/menu_config_win.cc
+                          the Windows metrics, split on version. Windows 11
+                          draws rounded menus natively, so it keeps a small
+                          radius and the Refresh-era paddings; everything older
+                          gets the classic square menu. use_bubble_border keys
+                          off corner_radius, so the older path turns the bubble
+                          border off by itself.
+
+  ui/views/controls/menu/menu_item_view.cc
+                          the classic triangular submenu arrow instead of the
+                          Refresh chevron. components/vector_icons already
+                          ships submenu_arrow_old.icon and lists it in its
+                          BUILD.gn, so no resource work was needed.
+
+Verified by building ui/views:views. The look itself is unverified -- it needs
+eyes on a real menu, which is also the only way to judge the metrics.
+
+diff --git a/ui/views/controls/menu/menu_config.cc b/ui/views/controls/menu/menu_config.cc
+index a711c503287a7..0370f0e84fbfe 100644
+--- a/ui/views/controls/menu/menu_config.cc
++++ b/ui/views/controls/menu/menu_config.cc
+@@ -85,14 +85,17 @@ void MenuConfig::InitCommon() {
+   context_menu_font_list = font_list = TypographyProvider::Get().GetFont(
+       style::CONTEXT_MENU, style::STYLE_BODY_3);
+   reserve_dedicated_arrow_column = false;
+-  menu_horizontal_border_size = 0;
+-  submenu_horizontal_overlap = 0;
+-  item_vertical_margin = 6;
+-  item_horizontal_border_padding = 12;
++  // Pre-Chrome-Refresh-2023 metrics: tighter items and separators, and an
++  // outer border, which is what a native-looking menu wants. Upstream's values
++  // are in the comment beside each.
++  menu_horizontal_border_size = 1;        // 0
++  submenu_horizontal_overlap = -1;        // 0
++  item_vertical_margin = 4;               // 6
++  item_horizontal_border_padding = 0;     // 12
+   arrow_size = 16;
+-  separator_height = 17;
+-  separator_spacing_height = 4;
+-  use_outer_border = false;
++  separator_height = 11;                  // 17
++  separator_spacing_height = 3;           // 4
++  use_outer_border = true;                // false
+ }
+ 
+ // static
+diff --git a/ui/views/controls/menu/menu_config_win.cc b/ui/views/controls/menu/menu_config_win.cc
+index a2dae078ccbd3..c19e99cad988c 100644
+--- a/ui/views/controls/menu/menu_config_win.cc
++++ b/ui/views/controls/menu/menu_config_win.cc
+@@ -8,6 +8,7 @@
+ 
+ #include <Vssym32.h>
+ 
++#include "base/win/windows_version.h"
+ #include "ui/gfx/system_fonts_win.h"
+ 
+ namespace views {
+@@ -22,8 +23,42 @@ void MenuConfig::InitPlatform() {
+        show_cues == TRUE);
+ 
+   SystemParametersInfo(SPI_GETMENUSHOWDELAY, 0, &show_delay, 0);
+-  separator_upper_height = 5;
+-  separator_lower_height = 7;
++
++  // Pre-Chrome-Refresh-2023 Windows metrics, ported from Thorium. Windows 11
++  // draws rounded menus natively, so it keeps a small radius and the tighter
++  // Refresh-era paddings; everything older gets the classic square menu, which
++  // is the whole point on Windows 7 and 8.
++  static const bool is_win11 =
++      base::win::GetVersion() >= base::win::Version::WIN11;
++
++  use_outer_border = true;
++  nonrounded_menu_vertical_border_size = 3;
++
++  if (is_win11) {
++    corner_radius = 8;
++    arrow_to_edge_padding = 4;
++    menu_horizontal_border_size = 4;
++    submenu_horizontal_overlap = 1;
++    rounded_menu_vertical_border_size = 4;
++    item_horizontal_padding = 8;
++    between_item_vertical_padding = 2;
++    separator_height = 1;
++    separator_upper_height = 1;
++    separator_lower_height = 1;
++    item_corner_radius = 4;
++  } else {
++    corner_radius = 0;
++    arrow_to_edge_padding = 2;
++    menu_horizontal_border_size = 3;
++    submenu_horizontal_overlap = 0;
++    item_vertical_margin = 3;
++    item_horizontal_border_padding = 0;
++    icon_label_spacing = 10;
++    separator_height = 5;
++    separator_upper_height = 3;
++    separator_lower_height = 3;
++    separator_spacing_height = 2;
++  }
+ 
+   use_bubble_border = corner_radius > 0;
+ }
+diff --git a/ui/views/controls/menu/menu_item_view.cc b/ui/views/controls/menu/menu_item_view.cc
+index 602f9b870f640..a15efc61078ad 100644
+--- a/ui/views/controls/menu/menu_item_view.cc
++++ b/ui/views/controls/menu/menu_item_view.cc
+@@ -1685,11 +1685,9 @@ void MenuItemView::UpdateSelectionBasedState(bool paint_as_selected) {
+   last_paint_as_selected_ = paint_as_selected;
+   const Colors colors = CalculateColors(paint_as_selected);
+   if (submenu_arrow_image_view_) {
++    // The pre-Chrome-Refresh-2023 triangle, not the Refresh chevron.
+     submenu_arrow_image_view_->SetImage(ui::ImageModel::FromVectorIcon(
+-        features::IsRoundedIconsEnabled()
+-            ? vector_icons::kKeyboardArrowRightFlippableIcon
+-            : vector_icons::kSubmenuArrowChromeRefreshOldIcon,
+-        colors.icon_color));
++        vector_icons::kSubmenuArrowOldIcon, colors.icon_color));
+   }
+   MenuDelegate* delegate = GetDelegate();
+   if (type_ == Type::kCheckbox && delegate &&
+diff --git a/ui/views/layout/layout_provider.cc b/ui/views/layout/layout_provider.cc
+index d243aa338748a..5b98869d1e03f 100644
+--- a/ui/views/layout/layout_provider.cc
++++ b/ui/views/layout/layout_provider.cc
+@@ -226,6 +226,16 @@ ShapeSysTokens GetShapeSysToken(ShapeContextTokens id) {
+ 
+ int LayoutProvider::GetCornerRadiusMetric(ShapeContextTokens id,
+                                           const gfx::Size& size) const {
++  // Pre-Chrome-Refresh-2023: menus are square. Upstream maps both of these to
++  // kMediumSmall, i.e. a 12px radius, which is the look this build exists to
++  // avoid on Windows. Done here rather than in the token map because that has
++  // no token for "no radius" -- kDefault means "missing mapping" and trips the
++  // DCHECK below. kMenuTouchRadius is left rounded, as touch menus should be.
++  if (id == ShapeContextTokens::kMenuRadius ||
++      id == ShapeContextTokens::kMenuAuxRadius) {
++    return 0;
++  }
++
+   ShapeSysTokens token = GetShapeSysToken(id);
+   DCHECK_NE(token, ShapeSysTokens::kDefault)
+       << "kDefault token means there is a missing mapping between shape tokens";

@@ -1,5 +1,6 @@
 01-disable-redraw-lock-dropped-from-electron-restored.patch
 03-win32_cross_build.patch
+04-pre-CR23_UI.patch
 05-default_app_changes.patch
 06-link-vertical-tabs-features.patch
 07-restore-32-bit.patch
