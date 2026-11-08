@@ -14,30 +14,29 @@ Ported from Thorium rather than copied. Three differences, all deliberate:
     and carrying it would mean porting Thorium's ui_base_features hunks as well
     for a switch nobody here would flip.
 
-  * Only the ui/ side. Of the 57 files Thorium's patch touches, 38 are under
-    chrome/browser and describe UI that Electron does not compile or display,
-    and three more are WebUI CSS for chrome:// pages Electron does not have.
-    The toggle_button, combobox, editable_combobox and tree_view changes are
-    Chrome-settings widgets that an Electron app never shows either.
+  * Only the ui/ side -- see the end of this header for what was left out and
+    why.
 
-  * Restructured for Chromium 152. Thorium's GetCornerRadiusMetric hunk
-    switches on ShapeContextTokens directly; upstream now maps context tokens
-    to ShapeSysTokens first and switches on those, so the override had to move
-    to the top of the function.
+  * Restructured for Chromium 152. Thorium's GetCornerRadiusMetric switch reads
+    ShapeContextTokens directly; upstream now maps context tokens to
+    ShapeSysTokens first and switches on those, so the override moved to the top
+    of the function. It is also deliberately non-exhaustive, where Thorium's is
+    exhaustive with a NOTREACHED: anything unlisted falls through to upstream's
+    mapping, so a token added by a future roll keeps working.
 
 What each file does:
 
   ui/views/layout/layout_provider.cc
-                          returns a zero radius for kMenuRadius and
-                          kMenuAuxRadius, which upstream maps to kMediumSmall
-                          (12px). This is the change that actually squares the
-                          menus off: MenuConfig::corner_radius and
-                          auxiliary_corner_radius are initialised from these
-                          tokens (see menu_config.h), so everything else
-                          follows. Not done by editing the token map, which has
-                          no "no radius" token -- kDefault means "missing
-                          mapping" and trips a DCHECK. kMenuTouchRadius stays
-                          rounded, as touch menus should be.
+                          the pre-Refresh corner radii. kMenuRadius and
+                          kMenuAuxRadius go to zero, which is the change that
+                          actually squares the menus off -- MenuConfig's
+                          corner_radius and auxiliary_corner_radius are
+                          initialised from those tokens (see menu_config.h), so
+                          everything else follows. kMenuTouchRadius stays
+                          rounded at 8 rather than upstream's 12, as touch menus
+                          should be. The rest (badge, textfield, button,
+                          combobox, dialog, find bar, extensions menu button,
+                          omnibox, content separator) take Thorium's values.
 
   ui/views/controls/menu/menu_config.cc
                           the cross-platform metrics in InitCommon(): tighter
@@ -59,6 +58,47 @@ What each file does:
                           Refresh chevron. components/vector_icons already
                           ships submenu_arrow_old.icon and lists it in its
                           BUILD.gn, so no resource work was needed.
+
+Left out of Thorium's 57 files, having checked rather than assumed:
+
+  chrome/browser/** (38)  UI Electron does not compile. The only
+                          chrome/browser/ui/views/ sources chromium_src builds
+                          are eye_dropper, the Picture-in-Picture overlay
+                          controls, and the Linux status-icon and dark-mode
+                          helpers.
+
+  toggle_button, combobox, editable_combobox, tree_view
+                          Electron's shell/ contains no views::ToggleButton,
+                          views::Combobox, views::TreeView, views::Textfield or
+                          views::DialogDelegate, and none of the chrome/ sources
+                          above are those widgets. The corner-radius tokens for
+                          them are taken anyway, since they cost one hunk in a
+                          file this patch already touches.
+
+  ui/webui/resources/cr_elements/** (3 CSS)
+                          Electron does serve WebUI, but only two hosts:
+                          chrome://devtools, whose front end carries its own
+                          styling, and chrome://accessibility, whose resources
+                          (chrome/browser/resources/accessibility/) are plain
+                          CSS with no cr_elements, cr-button, cr-toggle or
+                          md-select. The cr_elements targets are in Electron's
+                          link graph, so the resources ship in the pak -- they
+                          are simply never rendered. Note this does not affect
+                          <select> in app content either: md_select_lit.css
+                          styles chrome:// pages, and web-content select popups
+                          are painted by Blink, not views.
+
+  the three DISTANCE_* metrics
+                          DISTANCE_TEXTFIELD_HORIZONTAL_TEXT_PADDING and
+                          DISTANCE_CONTROL_VERTICAL_TEXT_PADDING need a views
+                          Textfield or control, and DISTANCE_CLOSE_BUTTON_MARGIN
+                          a views bubble close button. Of the compiled chrome/
+                          sources, the only one reading LayoutProvider metrics
+                          is overlay_window_live_caption_dialog.cc, which
+                          chromium_src does not build.
+
+  ui/base/ui_base_features.*, ui/resources/ui_resources.grd
+                          the Thorium2024 flag and its resources; see above.
 
 Verified by building ui/views:views. The look itself is unverified -- it needs
 eyes on a real menu, which is also the only way to judge the metrics.
@@ -168,21 +208,48 @@ index 602f9b870f640..a15efc61078ad 100644
    MenuDelegate* delegate = GetDelegate();
    if (type_ == Type::kCheckbox && delegate &&
 diff --git a/ui/views/layout/layout_provider.cc b/ui/views/layout/layout_provider.cc
-index d243aa338748a..5b98869d1e03f 100644
+index d243aa338748a..7fd9d2acd306b 100644
 --- a/ui/views/layout/layout_provider.cc
 +++ b/ui/views/layout/layout_provider.cc
-@@ -226,6 +226,16 @@ ShapeSysTokens GetShapeSysToken(ShapeContextTokens id) {
+@@ -226,6 +226,43 @@ ShapeSysTokens GetShapeSysToken(ShapeContextTokens id) {
  
  int LayoutProvider::GetCornerRadiusMetric(ShapeContextTokens id,
                                            const gfx::Size& size) const {
-+  // Pre-Chrome-Refresh-2023: menus are square. Upstream maps both of these to
-+  // kMediumSmall, i.e. a 12px radius, which is the look this build exists to
-+  // avoid on Windows. Done here rather than in the token map because that has
-+  // no token for "no radius" -- kDefault means "missing mapping" and trips the
-+  // DCHECK below. kMenuTouchRadius is left rounded, as touch menus should be.
-+  if (id == ShapeContextTokens::kMenuRadius ||
-+      id == ShapeContextTokens::kMenuAuxRadius) {
-+    return 0;
++  // Pre-Chrome-Refresh-2023 corner radii. Upstream routes every token through
++  // GetShapeSysToken() below, which bottoms out at 8-24px for most of them;
++  // these are the smaller pre-Refresh values.
++  //
++  // Not exhaustive over ShapeContextTokens on purpose. Anything unlisted falls
++  // through to upstream's mapping, so a token added by a future Chromium roll
++  // keeps working -- where Thorium's switch is exhaustive and would reach its
++  // NOTREACHED instead.
++  switch (id) {
++    case ShapeContextTokens::kMenuRadius:
++    case ShapeContextTokens::kMenuAuxRadius:
++      // Square menus, which is the point of this patch. Upstream gives these
++      // kMediumSmall, i.e. 12px. Overridden here rather than in the token map
++      // because that map has no "no radius" token: kDefault means "missing
++      // mapping" and trips the DCHECK below.
++      return GetCornerRadiusMetric(Emphasis::kNone);
++    case ShapeContextTokens::kMenuTouchRadius:
++      // Still rounded for touch, just less than upstream's 12px.
++      return GetCornerRadiusMetric(Emphasis::kHigh);
++    case ShapeContextTokens::kBadgeRadius:
++      return 3;
++    case ShapeContextTokens::kTextfieldRadius:
++      return 4;
++    case ShapeContextTokens::kContentSeparatorRadius:
++      return 8;
++    case ShapeContextTokens::kOmniboxExpandedRadius:
++      return 16;
++    case ShapeContextTokens::kButtonRadius:
++    case ShapeContextTokens::kComboboxRadius:
++    case ShapeContextTokens::kDialogRadius:
++    case ShapeContextTokens::kExtensionsMenuButtonRadius:
++    case ShapeContextTokens::kFindBarViewRadius:
++      return GetCornerRadiusMetric(Emphasis::kMedium, size);
++    default:
++      break;
 +  }
 +
    ShapeSysTokens token = GetShapeSysToken(id);
