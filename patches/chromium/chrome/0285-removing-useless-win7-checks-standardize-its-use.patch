@@ -1,6 +1,10 @@
 Title: Removing useless Win7 checks + standardize its use
 Upstream-Commit: dddfcf1b9e97593f1321a6744a37e91e8a32d7ab (2017/6/3 6:38:43) Removing useless Win7 checks + standardize its use
 Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/dddfcf1b9e97593f1321a6744a37e91e8a32d7ab.diff
+Rebased-44.10.2: trimmed the legacy_render_widget_host_win.cc hunk's leading context. It
+edits the condition inside the block chromium/ui/0074 inserts, and anchored on the two
+lines that happened to precede that block; 0074 now inserts it after upstream's new
+AXSystemCaretWin code, so the hunk anchors on the comment it actually belongs to.
 
 diff --git a/base/files/file_enumerator_win.cc b/base/files/file_enumerator_win.cc
 index e629cc203e5e8..402a07209a8a2 100644
@@ -263,9 +267,7 @@ index 770362c81171f..b1fb4d6280f85 100644
  #include "content/browser/accessibility/browser_accessibility_state_impl.h"
  #include "content/browser/renderer_host/direct_manipulation_helper_win.h"
  #include "content/browser/renderer_host/render_widget_host_impl.h"
-@@ -122,7 +123,8 @@ LegacyRenderWidgetHostHWND::~LegacyRenderWidgetHostHWND() {
-   }
- 
+@@ -124,5 +125,6 @@ bool LegacyRenderWidgetHostHWND::InitOrDeleteSelf(HWND parent) {
    // Only register a touch window if we are using WM_TOUCH.
 -  if (!features::IsUsingWMPointerForTouch())
 +  if (!features::IsUsingWMPointerForTouch() &&

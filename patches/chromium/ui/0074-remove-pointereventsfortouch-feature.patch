@@ -3,14 +3,18 @@ Upstream-Commit: b0fcbd390602e2e029d8d02f53cf5816c31f7196 (2024/11/12 8:43:42) R
 Upstream-Commit: 0095cb7bf8065beea7e6331411476cb231866d48 (2025/3/19 0:30:21) Remove some unused views::HWNDMessageHandler member variables
 Upstream-Commit: e20e2dc08f53bd03dbedc7dc2318d6f7ad442a70 (2025/10/18 2:52:12) Remove obsolete GenerateTouchEvent
 Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/b0fcbd390602e2e029d8d02f53cf5816c31f7196.diff
+Rebased-44.10.2: re-anchored the legacy_render_widget_host_win.cc hunk. Upstream added
+an AXSystemCaretWin block between the early-return and the UI Automation comment this
+hunk anchored on, so the RegisterTouchWindow call now follows that block instead. Same
+position relative to the UI Automation setup, which is what the original commit cared
+about.
 
 diff --git a/content/browser/renderer_host/legacy_render_widget_host_win.cc b/content/browser/renderer_host/legacy_render_widget_host_win.cc
 index e63c2f637828d..aa46e93035953 100644
 --- a/content/browser/renderer_host/legacy_render_widget_host_win.cc
 +++ b/content/browser/renderer_host/legacy_render_widget_host_win.cc
-@@ -181,6 +181,10 @@ bool LegacyRenderWidgetHostHWND::InitOrDeleteSelf(HWND parent) {
-     return false;
-   }
+@@ -264,5 +264,9 @@ bool LegacyRenderWidgetHostHWND::InitOrDeleteSelf(HWND parent) {
+   ax_system_caret_ = std::move(ax_system_caret);
  
 +  // Only register a touch window if we are using WM_TOUCH.
 +  if (!features::IsUsingWMPointerForTouch())

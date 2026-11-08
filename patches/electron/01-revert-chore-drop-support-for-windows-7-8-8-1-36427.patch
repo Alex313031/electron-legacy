@@ -1,5 +1,17 @@
 Title: Revert "chore: drop support for Windows 7 / 8 / 8.1 (#36427)"
 Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 electron/chore_drop_support_for_Windows_7__8__8.1_(#36427).diff
+Rebased-44.10.2: dropped the electron_api_power_monitor_win.cc hunk and re-contexted the
+electron_desktop_window_tree_host_win.cc include hunk.
+
+The power monitor hunk resolved RegisterSuspendResumeNotification through GetProcAddress
+because Windows 7 does not export it. Upstream has since rewritten that file: suspend and
+resume come from base::PowerMonitor and session changes from ui::SessionChangeObserver, so
+Electron no longer calls the API at all and there is nothing left to guard. The protection
+is not lost -- chromium/base/0150-win7dep-call-registersuspendresumenotification-directly
+does the same GetProcAddress resolution at base's call site, which is the one that now
+runs (see base/power_monitor/power_monitor_device_source_win.cc).
+
+The include hunk just needed ui/events/event.h, which upstream added, as trailing context.
 
 diff --git a/filenames.gni b/filenames.gni
 index 8518fc0821..c1e90c0f56 100644
@@ -23,32 +35,6 @@ index 8518fc0821..c1e90c0f56 100644
      "shell/browser/notifications/win/windows_toast_notification.cc",
      "shell/browser/notifications/win/windows_toast_notification.h",
      "shell/browser/notifications/win/windows_toast_activator.cc",
-diff --git a/shell/browser/api/electron_api_power_monitor_win.cc b/shell/browser/api/electron_api_power_monitor_win.cc
-index 0e400dc44e..90f2cf97df 100644
---- a/shell/browser/api/electron_api_power_monitor_win.cc
-+++ b/shell/browser/api/electron_api_power_monitor_win.cc
-@@ -44,10 +44,17 @@ void PowerMonitor::InitPlatformSpecificMonitors() {
- 
-   // For Windows 8 and later, a new "connected standby" mode has been added and
-   // we must explicitly register for its notifications.
--  power_notify_handle_ = RegisterSuspendResumeNotification(
--      static_cast<HANDLE>(window_), DEVICE_NOTIFY_WINDOW_HANDLE);
--  PLOG_IF(ERROR, !power_notify_handle_)
--      << "RegisterSuspendResumeNotification failed";
-+  auto RegisterSuspendResumeNotification =
-+      reinterpret_cast<decltype(&::RegisterSuspendResumeNotification)>(
-+          GetProcAddress(GetModuleHandle(L"user32.dll"),
-+                         "RegisterSuspendResumeNotification"));
-+
-+  if (RegisterSuspendResumeNotification) {
-+    power_notify_handle_ = RegisterSuspendResumeNotification(
-+        static_cast<HANDLE>(window_), DEVICE_NOTIFY_WINDOW_HANDLE);
-+    PLOG_IF(ERROR, !power_notify_handle_)
-+        << "RegisterSuspendResumeNotification failed";
-+  }
- 
-   // On ARM64 Windows, UnregisterSuspendResumeNotification may
-   // crash in powrprof!PowerUnregisterSuspendResumeNotification by dereferencing
 diff --git a/shell/browser/browser_win.cc b/shell/browser/browser_win.cc
 index 10513ba74e..5d24ab7318 100644
 --- a/shell/browser/browser_win.cc
@@ -2416,11 +2402,12 @@ diff --git a/shell/browser/ui/win/electron_desktop_window_tree_host_win.cc b/she
 index b49b566cff..e8922f8b2c 100644
 --- a/shell/browser/ui/win/electron_desktop_window_tree_host_win.cc
 +++ b/shell/browser/ui/win/electron_desktop_window_tree_host_win.cc
-@@ -4,6 +4,7 @@
+@@ -11,7 +11,8 @@
  #include "shell/browser/native_window_views.h"
  #include "shell/browser/ui/views/win_frame_view.h"
  #include "shell/browser/win/dark_mode.h"
 +#include "ui/base/win/shell.h"
+ #include "ui/events/event.h"
  
  namespace electron {
  

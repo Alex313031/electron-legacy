@@ -1,6 +1,8 @@
 Title: win7dep: remove non aeroglass code
 Upstream-Commit: 85a8bf56bee1ca1bb95c781b30128beb8c73b35a (2023/1/25 6:01:04) win7dep: remove non aeroglass code
 Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/85a8bf56bee1ca1bb95c781b30128beb8c73b35a.diff
+Rebased-44.10.2: widened the desktop_window_tree_host_win.cc include-block context, which
+gained ui/base/ui_base_features.h between the two lines this hunk anchored between.
 
 diff --git a/chrome/browser/themes/theme_helper_win.cc b/chrome/browser/themes/theme_helper_win.cc
 index 259668e16470f..3151442f79684 100644
@@ -687,8 +689,9 @@ diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc b/ui/v
 index 0be1688818063..7ee8e0fb90201 100644
 --- a/ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc
 +++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc
-@@ -28,6 +28,7 @@
+@@ -38,7 +38,8 @@
  #include "ui/base/mojom/window_show_state.mojom.h"
+ #include "ui/base/ui_base_features.h"
  #include "ui/base/win/event_creation_utils.h"
  #include "ui/base/win/hwnd_metrics.h"
 +#include "ui/base/win/shell.h"

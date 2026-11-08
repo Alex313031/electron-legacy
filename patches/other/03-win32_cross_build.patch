@@ -250,10 +250,10 @@ diff --git a/electron/buildflags/BUILD.gn b/electron/buildflags/BUILD.gn
 index ef00ad2..825a701 100644
 --- a/electron/buildflags/BUILD.gn
 +++ b/electron/buildflags/BUILD.gn
-@@ -13,6 +13,7 @@ buildflag_header("buildflags") {
+@@ -12,6 +12,7 @@ buildflag_header("buildflags") {
+     "ENABLE_PDF_VIEWER=$enable_pdf_viewer",
      "ENABLE_ELECTRON_EXTENSIONS=$enable_electron_extensions",
      "ENABLE_BUILTIN_SPELLCHECKER=$enable_builtin_spellchecker",
-     "OVERRIDE_LOCATION_PROVIDER=$enable_fake_location_provider",
 +    "ENABLE_V8_CONTEXT_SNAPSHOT_CHECKSUM=$enable_v8_context_snapshot_checksum",
    ]
  

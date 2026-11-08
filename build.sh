@@ -10,12 +10,12 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.6"
+SCRIPTVER="1.2.7"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Electron release the patches in patches/ are made for.
-ELECTRON_VERSION="44.2.0"
+ELECTRON_VERSION="44.10.2"
 
 # The gclient root: .gclient and the state files beside it (.gclient_entries,
 # .cipd/, .gcs_entries), plus src/, dist/ and build.log. Kept in a subdirectory
@@ -123,10 +123,15 @@ DO_PACKAGE=false
 DO_NPM=false
 DO_CLEAN=false
 DO_SYNC=false
+DO_RESET=false
 ONLY_DOWNLOAD=false
 ONLY_PATCH=false
 BUILD_ONLY=false
+KEEP_GOING=false
 SHALLOW=true
+
+# Patches that apply_series could not apply, collected under --keep-going.
+FAILED_PATCHES=()
 EXTRA_GN_ARGS=()
 
 # Colors
@@ -168,8 +173,20 @@ Options:
                               Discards any local changes in src/ (it resets to v$ELECTRON_VERSION).
   -p, --patch                 Only apply patches to already-downloaded sources, then exit; needs no arch.
                               Patches that are already applied are skipped.
+  -k, --keep-going            Don't stop the patch step at the first patch that
+                              doesn't apply: skip it, carry on, and list every
+                              failure at the end. For rebasing the series onto a
+                              new Electron release in one pass instead of one
+                              round trip per broken patch. Still fails at the
+                              end, and writes no stamp.
   -s, --sync                  Re-sync existing sources before building (same reset as -d).
                               Without an arch it just syncs, then exits.
+      --reset                 Put src/ back to stock -- synced sources with
+                              Electron's own patches and none of ours -- without
+                              re-cloning or re-syncing. Seconds, not the hour a
+                              sync costs. Combine with -p to reset and re-apply
+                              the series in one go, which is the loop for
+                              rebasing onto a new release.
   -b, --build-only            Build src/ exactly as it is: skip syncing and the
                               patch series entirely, go straight to gn gen and
                               the build. For iterating on experimental changes
@@ -354,7 +371,9 @@ parse_args() {
       -d|--download-sources) ONLY_DOWNLOAD=true ;;
       -p|--patch) ONLY_PATCH=true ;;
       -s|--sync) DO_SYNC=true ;;
+      --reset) DO_RESET=true ;;
       -b|--build-only) BUILD_ONLY=true ;;
+      -k|--keep-going) KEEP_GOING=true ;;
       --full-history) SHALLOW=false ;;
       --gn-args)
         [ $# -ge 2 ] || arg_error "$1 needs a value"
@@ -383,6 +402,18 @@ parse_args() {
   # --build-only is "build what is in src/ right now", so it contradicts every
   # flag whose job is to change what's in there, and it has nothing to build
   # without an arch.
+  # -d and --sync both reset the checkout on their way through, so --reset
+  # alongside them is asking for the same thing twice; say so rather than
+  # silently doing nothing. --build-only is the opposite instruction.
+  if [ "$DO_RESET" = true ]; then
+    if [ "$ONLY_DOWNLOAD" = true ] || [ "$DO_SYNC" = true ]; then
+      arg_error "--reset is redundant with -d and --sync, which already reset the checkout"
+    fi
+    if [ "$BUILD_ONLY" = true ]; then
+      arg_error "--reset can't be combined with --build-only"
+    fi
+  fi
+
   if [ "$BUILD_ONLY" = true ]; then
     if [ "$ONLY_DOWNLOAD" = true ] || [ "$ONLY_PATCH" = true ] || [ "$DO_SYNC" = true ]; then
       arg_error "--build-only can't be combined with -d, -p or --sync"
@@ -593,6 +624,44 @@ setup_toolchain() {
   esac
 }
 
+sync_jobs() {
+  # One job per CPU, capped at MAX_SYNC_JOBS (SYNC_JOBS overrides). Shared by
+  # gclient sync.
+  local cpus jobs
+  cpus=$(cpu_count)
+  jobs=$(( cpus < MAX_SYNC_JOBS ? cpus : MAX_SYNC_JOBS ))
+  jobs="${SYNC_JOBS:-$jobs}"
+  [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || error_exit "Invalid SYNC_JOBS '$jobs'"
+  printf '%s\n' "$jobs"
+}
+
+reset_sources() {
+  # Put the checkout back to stock -- the synced sources with Electron's own
+  # patches applied and none of ours -- without touching the network, so the
+  # series can be tried again from the top. Seconds, against the hour-plus a
+  # re-sync costs.
+  #
+  # Deliberately not `gclient revert`: that fetches, resets every dependency to
+  # whatever .gclient_entries recorded rather than what is checked out, and
+  # aborts anyway because a checkout would overwrite the untracked nested
+  # checkouts inside src (third_party/aria-practices and friends). The reasoning
+  # for what tools/reset_sources.py does instead is in its docstring.
+  [ -d "$ELECTRON_PATH/.git" ] \
+      || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
+
+  VERBOSE=1 execute "Resetting $SRC_PATH to stock" "Unable to reset the checkout" \
+      py "$HERE/tools/reset_sources.py" \
+      --patches "$PATCHES_PATH" \
+      --series "chromium=$SRC_PATH" \
+      --series "electron=$ELECTRON_PATH" \
+      --series "node=$SRC_PATH/third_party/electron_node" \
+      --series "other=$SRC_PATH"
+
+  # Nothing of ours is applied now, whatever the stamp said.
+  rm -f "$(patches_stamp)"
+  log "${GRE} %s is back to stock${c0}\n" "$SRC_PATH"
+}
+
 fetch_sources() {
   # Fetches and syncs down Electron sources in src/
   check_node
@@ -647,7 +716,20 @@ EOF
   # --reset throws our patches away, so the tree is unpatched after this.
   rm -f "$(patches_stamp)"
 
-  local flags=(sync --force --reset --delete_unversioned_trees
+  # Deliberately no --delete_unversioned_trees. src/electron is the solution,
+  # but it also sits *inside* src/, where Chromium's DEPS knows nothing about
+  # it -- so pruning unversioned trees while syncing src deletes the Electron
+  # checkout. gclient syncs the solution first, so by the time src is pruned
+  # src/electron's turn has passed and nothing recreates it; the sync then dies
+  # in the hooks stage with
+  #   can't open file 'src/electron/script/apply_all_patches.py'
+  # after however long the Chromium fetch took. (Electron's own sibling deps --
+  # third_party/electron_node, nan, squirrel.mac -- survive it, because they are
+  # fetched after src and so get recreated.) A first sync never hits this:
+  # nothing exists to prune yet. Electron's own build-tools doesn't pass the
+  # flag either, and all it buys is pruning deps that upstream dropped between
+  # versions, which is a disk-space concern, not a correctness one.
+  local flags=(sync --force --reset
                --revision "src/electron@refs/tags/v$ELECTRON_VERSION")
   if [ "$SHALLOW" = true ]; then
     # Depth-1 fetch of exactly the pinned revision of every repo. Skips
@@ -663,17 +745,19 @@ EOF
   # five minutes. --verbose is what makes that fetch report progress.
   [ "$VERBOSE" = 1 ] && flags+=(--verbose)
 
-  # One job per CPU, capped at MAX_SYNC_JOBS (SYNC_JOBS overrides).
-  local cpus jobs
-  cpus=$(cpu_count)
-  jobs=$(( cpus < MAX_SYNC_JOBS ? cpus : MAX_SYNC_JOBS ))
-  jobs="${SYNC_JOBS:-$jobs}"
-  [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || error_exit "Invalid SYNC_JOBS '$jobs'"
-  flags+=(--jobs "$jobs")
+  flags+=(--jobs "$(sync_jobs)")
 
   cd "$ROOT_PATH" || error_exit "Unable to enter $ROOT_PATH"
   VERBOSE=1 execute "Syncing Electron v$ELECTRON_VERSION sources into $SRC_PATH (this takes a long time)" \
       "gclient sync failed" dt gclient "${flags[@]}"
+
+  # --reset reverts tracked modifications but leaves untracked files alone, and
+  # without --delete_unversioned_trees (see above) gclient no longer prunes them
+  # either -- so the ~400 files our series *creates* survive the sync, and the
+  # next apply dies on the first of them with "already exists in working
+  # directory". reset_sources removes exactly those, by name, out of the
+  # patches. Cheap, local, and it makes "synced" mean "stock".
+  reset_sources
 }
 
 apply_series() {
@@ -709,6 +793,11 @@ apply_series() {
       skipped=$((skipped + 1))
     else
       git -C "$dir" apply --check --verbose "${flags[@]}" "$file" >>"$LOG_FILE" 2>&1
+      if [ "$KEEP_GOING" = true ]; then
+        warn "does not apply, skipping: $name/$p"
+        FAILED_PATCHES+=("$name/$p")
+        continue
+      fi
       error_exit "Patch $name/$p does not apply ($applied applied so far), check $LOG_FILE for details."
     fi
   done < "$series"
@@ -750,23 +839,58 @@ patches_are_applied() {
   [ "$(cat "$stamp")" = "$(patches_digest)" ]
 }
 
+check_source_version() {
+  # The checkout has to be at the release ELECTRON_VERSION names, and not only
+  # because that is what the patches were written against: it also becomes
+  # override_electron_version and the dist/ and npm package names. A checkout
+  # at some other tag would build fine and be labelled as this version, which
+  # is worse than failing, because it looks like a correct build.
+  #
+  # Deliberately not inside apply_patches: the patch stamp covers patches/ and
+  # not the version, so bumping ELECTRON_VERSION without --sync leaves a stamp
+  # that still matches, apply_patches never runs, and nothing else would look.
+  [ -d "$ELECTRON_PATH/.git" ] || return 0
+
+  # Electron's package.json always says 0.0.0-development, so go by the tag --
+  # and compare HEAD against the tag's commit rather than asking what tag HEAD
+  # is at. `describe --exact-match` only answers the latter, so it says nothing
+  # when HEAD is at an untagged commit, which is precisely the case worth
+  # catching: a re-cloned src/electron sits on main, 30k commits from the
+  # release, and gclient reads its DEPS from there.
+  local tag head
+  tag=$(git -C "$ELECTRON_PATH" rev-parse -q --verify "refs/tags/v$ELECTRON_VERSION^{commit}" 2>/dev/null) || tag=""
+
+  if [ -z "$tag" ]; then
+    # The tag isn't fetched, which a --no-history checkout need not have.
+    # Absence is not proof of a mismatch, so don't claim one.
+    warn "src/electron has no v$ELECTRON_VERSION tag to compare against; can't confirm the checkout."
+    return 0
+  fi
+
+  head=$(git -C "$ELECTRON_PATH" rev-parse HEAD)
+  [ "$head" = "$tag" ] && return 0
+
+  local at
+  at=$(git -C "$ELECTRON_PATH" describe --tags --always HEAD 2>/dev/null) || at="$head"
+  error_exit "src/electron is at $at, not v$ELECTRON_VERSION, so its DEPS and patch targets are the wrong ones and this build would still be labelled v$ELECTRON_VERSION. Put it on the tag (git -C $ELECTRON_PATH checkout --detach v$ELECTRON_VERSION) and re-run with --sync."
+}
+
 apply_patches() {
   [ -d "$ELECTRON_PATH" ] || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
-
-  # Electron's package.json always says 0.0.0-development, so compare against
-  # the release tag. No-history checkouts don't have the tag; skip the check then.
-  local tag head
-  if tag=$(git -C "$ELECTRON_PATH" rev-parse -q --verify "refs/tags/v$ELECTRON_VERSION^{commit}" 2>/dev/null); then
-    head=$(git -C "$ELECTRON_PATH" rev-parse HEAD)
-    if [ "$tag" != "$head" ]; then
-      warn "src/electron isn't at v$ELECTRON_VERSION, which the patches are for; expect failures."
-    fi
-  fi
 
   apply_series chromium "$SRC_PATH"
   apply_series electron "$ELECTRON_PATH"
   apply_series node "$SRC_PATH/third_party/electron_node"
   apply_series other "$SRC_PATH"
+
+  # With --keep-going the series ran to the end over the failures; say what they
+  # all were and stop, rather than building a half-patched tree. No stamp
+  # either: nothing here was fully applied.
+  if [ ${#FAILED_PATCHES[@]} -gt 0 ]; then
+    log "${RED} %d patches did not apply:${c0}\n" "${#FAILED_PATCHES[@]}"
+    printf '   %s\n' "${FAILED_PATCHES[@]}" | tee -a "$LOG_FILE"
+    error_exit "Fix them, then re-run with --reset (the tree is partially patched now)."
+  fi
 
   # Record what we just applied so a later build doesn't redo the series.
   patches_digest > "$(patches_stamp)"
@@ -1070,12 +1194,21 @@ main() {
     fi
   fi
 
-  if [ "$ONLY_DOWNLOAD" = true ] || [ "$ONLY_PATCH" = true ]; then
+  if [ "$ONLY_DOWNLOAD" = true ] || [ "$DO_RESET" = true ] || [ "$ONLY_PATCH" = true ]; then
+    # Reset runs before patch, so --reset -p is one invocation that puts the
+    # tree back to stock and replays the series over it.
     if [ "$ONLY_DOWNLOAD" = true ]; then
       clone_depot_tools
       fetch_sources
+    elif [ "$DO_RESET" = true ]; then
+      clone_depot_tools
+      check_python
+      reset_sources
     fi
-    [ "$ONLY_PATCH" = true ] && apply_patches
+    if [ "$ONLY_PATCH" = true ]; then
+      check_source_version
+      apply_patches
+    fi
     exit 0
   fi
 
@@ -1094,7 +1227,10 @@ main() {
   else
     if [ "$DO_SYNC" = true ] || [ ! -d "$ELECTRON_PATH/.git" ]; then
       fetch_sources
+    elif [ "$DO_RESET" = true ]; then
+      reset_sources
     fi
+    check_source_version
     if patches_are_applied; then
       log "${GRE} Patches already applied; delete %s to force${c0}\n" "$(patches_stamp)"
     elif [ -f "$(patches_stamp)" ]; then

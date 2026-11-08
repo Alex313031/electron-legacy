@@ -1,6 +1,11 @@
 Title: DirectX9 Backend Removal: Remove shader model 3 code paths
 Upstream-Commit: fdb5d1f7570e6d7c4c2bfa8e8b7307e0abb8454c (2026/7/9 6:48:59) DirectX9 Backend Removal: Remove shader model 3 code paths
 Origin: e3kskoy7wqk/Electron-for-windows-7 v44.2.0 chromium/fdb5d1f7570e6d7c4c2bfa8e8b7307e0abb8454c.diff
+Rebased-44.10.2: dropped the StateManager11.cpp hunk that removed the braces around a
+bare `continue;` in syncCurrentValueAttribs. Upstream has since added a statement to
+that block (mDirtyCurrentValueAttribs.reset), so the braces are now required and the
+hunk was cosmetic anyway -- nothing it did is needed for the DirectX 9 removal this
+patch reverts.
 
 diff --git a/src/compiler/translator/hlsl/OutputHLSL.cpp b/src/compiler/translator/hlsl/OutputHLSL.cpp
 index 0021413d95..39c19d63e3 100644
@@ -879,16 +884,6 @@ index d81a5c7882..fc97c62cbb 100644
          dxViewport.TopLeftY = static_cast<float>(mCurPresentPathFastColorBufferHeight -
                                                   dxViewportTopLeftY - dxViewportHeight);
      }
-@@ -1779,9 +1793,7 @@ angle::Result StateManager11::syncCurrentValueAttribs(
-     for (auto attribIndex : dirtyActiveAttribs)
-     {
-         if (vertexAttributes[attribIndex].enabled)
--        {
-             continue;
--        }
- 
-         const auto *attrib                      = &vertexAttributes[attribIndex];
-         const auto &currentValue                = currentValues[attribIndex];
 @@ -2813,6 +2825,36 @@ bool StateManager11::syncIndexBuffer(ID3D11Buffer *buffer,
      return false;
  }
