@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.7"
+SCRIPTVER="1.2.8"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -85,6 +85,22 @@ export DEPOT_TOOLS_UPDATE=0
 # land in the default per-user location rather than a GOPATH shared with
 # whatever Go the host has installed.
 unset GOROOT GOPATH
+
+# Python picks its stdio encoding from the locale, which on Windows is a legacy
+# code page (cp1252 on an English install) rather than UTF-8. Electron's
+# apply_all_patches.py hook echoes whatever `git am` prints, and `git am` prints
+# each patch's subject -- decoded, so an RFC 2047 encoded header in an
+# ASCII-looking patch file still yields non-ASCII output. Electron 44 ships one:
+# patches/chromium/cherry-pick-69403d85b78b.patch, whose subject separates
+# "PowerMonitorDeviceSource" from "Handle IORegisterForSystemPower failure" with
+# a fullwidth colon (U+FF1A). Printing it raises UnicodeEncodeError, which
+# script/lib/git.py does not catch (it guards only BrokenPipeError), so the hook
+# dies and takes the whole gclient sync with it. The patch files themselves are
+# read as UTF-8 and fed to git as UTF-8, so stdio is the only locale-dependent
+# step; UTF-8 can encode anything, and the next upstream subject with a
+# non-Latin-1 character would hit this again, so set it everywhere rather than
+# just on Windows.
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
 
 # Custom Ninja status line.
 export NINJA_SUMMARIZE_BUILD=1
