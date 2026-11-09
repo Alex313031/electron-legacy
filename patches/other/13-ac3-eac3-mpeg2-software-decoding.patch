@@ -79,13 +79,38 @@ The media half.
                           AudioCodecToCodecID maps kAC3 and kEAC3 to their
                           AVCodecIDs, without which the decoder is selected and
                           then handed AV_CODEC_ID_NONE, and
-                          GetAllowedAudioDecoders gains ",ac3,eac3".
+                          GetAllowedAudioDecoders gains ",ac3,eac3". Plus the
+                          sample format, below.
+
+The sample format, which is why AC-3 only *looked* like it worked. Upstream
+builds the AC3/EAC3 demuxers without the decoders and passes the bitstream to a
+platform decoder, so AVCodecContextToAudioDecoderConfig hardcodes
+  sample_format = kSampleFormatS16
+("the sample_format for AC3/EAC3 must be 16", ETSI TS 102 366 F.3.1 and F.5.1 --
+true of the bitstream, not of decoded audio) and then returns early, before the
+check that bytes_per_channel agrees with ffmpeg. Build the decoder and ffmpeg
+reports its real output, planar float from ff_ac3_decoder, while the config
+still says 16-bit interleaved: the stream demuxes, a decoder is chosen, frames
+come out, and what describes them is wrong. Both sites are now conditional on
+ffmpeg having left sample_fmt unset, so a demux-only build keeps upstream's
+behaviour exactly and a build with the decoder gets the truth. Reported to
+Thorium, which has the same problem for the same reason.
   media/filters/ffmpeg_glue.cc
                           the ac3 and eac3 demuxers, so a bare .ac3 or .eac3
                           stream is openable and not only AC-3 inside MP4.
 
 The AC-3 paths stay behind ENABLE_PLATFORM_AC3_EAC3_AUDIO, as upstream has
 them, so this does not reach into builds that do not ask for those codecs.
+
+Which means this half of the patch does nothing at all without
+  enable_platform_ac3_eac3_audio = true
+in the GN args, and nothing warns you: Chromium defaults that to cast devices
+and tvOS, and with it off mime_util never adds AC3/EAC3 to the mp4 and mkv
+codec sets, CodecIDToAudioCodec cannot name the codec, and every hunk below in
+media/ compiles to nothing while ffmpeg still carries the decoders. What that
+looks like from the page is isTypeSupported() returning false and
+MediaCapabilities logging "Failed to parse audio contentType". assets/args/
+sets it; a build that imports its own args needs to as well.
 
 Verified by building third_party/ffmpeg:ffmpeg for win/x64 with both patches
 applied: `ninja -t inputs ffmpeg.dll` then lists ac3dec_float, ac3dec_fixed,
@@ -121,7 +146,7 @@ index b4c9a885bf..0661efc7a7 100644
        return false;
    }
 diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
-index fe27fd56dc..4e17b3b780 100644
+index fe27fd56dc..c200a34dcd 100644
 --- a/media/ffmpeg/ffmpeg_common.cc
 +++ b/media/ffmpeg/ffmpeg_common.cc
 @@ -185,6 +185,12 @@ AVCodecID AudioCodecToCodecID(AudioCodec audio_codec,
@@ -137,7 +162,51 @@ index fe27fd56dc..4e17b3b780 100644
      case AudioCodec::kALAC:
        return AV_CODEC_ID_ALAC;
      case AudioCodec::kMP3:
-@@ -1119,7 +1125,7 @@ int32_t HashCodecName(const char* codec_name) {
+@@ -397,14 +403,20 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
+   }
+ 
+   switch (codec) {
+-    // For AC3/EAC3 we enable only demuxing, but not decoding, so FFmpeg does
+-    // not fill |sample_fmt|.
+     case AudioCodec::kAC3:
+     case AudioCodec::kEAC3:
+ #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+-      // The spec for AC3/EAC3 audio is ETSI TS 102 366. According to sections
+-      // F.3.1 and F.5.1 in that spec the sample_format for AC3/EAC3 must be 16.
+-      sample_format = kSampleFormatS16;
++      // Upstream builds ffmpeg with the AC3/EAC3 demuxers but not the
++      // decoders, so ffmpeg leaves |sample_fmt| unset and the bitstream is
++      // described as the 16-bit its spec (ETSI TS 102 366 F.3.1, F.5.1)
++      // requires before being handed to a platform decoder. We build the
++      // decoders, so ffmpeg does fill |sample_fmt| -- with planar float, from
++      // ff_ac3_decoder -- and that is what the decoded buffers will hold.
++      // Describing them as S16 is simply wrong, so keep what ffmpeg reports
++      // and fall back to upstream's value only when it reports nothing.
++      if (sample_format == kUnknownSampleFormat) {
++        sample_format = kSampleFormatS16;
++      }
+       break;
+ #else
+       NOTREACHED();
+@@ -460,10 +472,14 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
+                      seek_preroll, codec_delay);
+ 
+ #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+-  // These are bitstream formats unknown to ffmpeg, so they don't have
+-  // a known sample format size.
+-  if (codec == AudioCodec::kAC3 || codec == AudioCodec::kEAC3)
++  // A bitstream ffmpeg only demuxes has no sample format, so the
++  // bytes_per_channel check at the end of this function cannot be made. When
++  // the decoder is built in, ffmpeg does report one and the check applies like
++  // it does to every other codec.
++  if ((codec == AudioCodec::kAC3 || codec == AudioCodec::kEAC3) &&
++      codec_context->sample_fmt == AV_SAMPLE_FMT_NONE) {
+     return true;
++  }
+ #endif
+ #if BUILDFLAG(ENABLE_PLATFORM_MPEG_H_AUDIO)
+   if (codec == AudioCodec::kMpegHAudio)
+@@ -1119,7 +1135,7 @@ int32_t HashCodecName(const char* codec_name) {
  
  const char* GetAllowedAudioDecoders() {
  #if BUILDFLAG(USE_PROPRIETARY_CODECS)
