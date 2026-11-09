@@ -1086,6 +1086,7 @@ check_ninja_identity() {
   if [ -f "$stamp" ] && [ "$(cat "$stamp")" != "$bin" ]; then
     warn "$out was last built by $(cat "$stamp"), now using $bin."
     warn "Ninja discards a build log written by another version, which rebuilds everything. Stick to one."
+    error_exit "Exiting now to avoid a large rebuild"
   fi
   printf '%s\n' "$bin" > "$stamp" 2>/dev/null || true
 }
