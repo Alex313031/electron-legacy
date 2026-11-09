@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.2.8"
+SCRIPTVER="1.3.1"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -116,6 +116,13 @@ case "$(uname -s)" in
   *) HOST_OS=unsupported ;;
 esac
 
+# For host executables we look for by name, e.g. ninja.
+if [ "$HOST_OS" = windows ]; then
+  EXE_SUFFIX=".exe"
+else
+  EXE_SUFFIX=""
+fi
+
 # A Windows host builds with its locally installed Visual Studio, so 0. A Linux
 # host has no local VS and must use a packaged toolchain, so 1: with 0,
 # vs_toolchain.py's `update` hook silently does nothing, no
@@ -217,6 +224,12 @@ Environment:
   ROOT_PATH          Where .gclient, src/, dist/ and build.log go
                      (default: $HERE/checkout)
   SYNC_JOBS          Parallel git operations for gclient sync (default: CPUs, max $MAX_SYNC_JOBS)
+  NINJA_BIN          The ninja to build with. Default: the one autoninja would
+                     use, i.e. src/third_party/ninja/ninja. Set this to use
+                     your own build; autoninja offers no way to, as it never
+                     looks on PATH for ninja. Keep it the same for a given out
+                     dir -- a ninja that meets another version's build log
+                     discards it, which rebuilds the whole tree.
   SISO_LIMITS        Extra Siso resource limits; -j appends local=<count> to it
                      (only when Siso, not Ninja, drives the build)
   DEPOT_TOOLS_PATH   depot_tools location if not on PATH (default: \$HOME/depot_tools)
@@ -983,6 +996,100 @@ uses_siso() {
   return 0
 }
 
+ninja_bin() {
+  # The ninja to build with. NINJA_BIN wins, which is the only way to use a
+  # ninja of your own: autoninja never consults PATH for it. It calls
+  # depot_tools' ninja.py in-process, and that prefers
+  # <checkout>/third_party/ninja/ninja and reaches PATH only if no checkout has
+  # one -- skipping any directory named depot_tools even then. So a host that
+  # wants its own build (Ninja XP, say) sets NINJA_BIN and we run it directly;
+  # see the Ninja branch of autoninja() for what that costs.
+  #
+  # Unset, this resolves what autoninja would have picked, so the default
+  # behaviour is unchanged.
+  # Reports failure rather than exiting: callers read this through $(...), where
+  # an error_exit would only kill the subshell and lose its message.
+  if [ -n "${NINJA_BIN:-}" ]; then
+    { [ -f "$NINJA_BIN" ] && [ -x "$NINJA_BIN" ]; } || return 1
+    printf '%s\n' "$NINJA_BIN"
+    return 0
+  fi
+  local vendored="$SRC_PATH/third_party/ninja/ninja$EXE_SUFFIX"
+  if [ -f "$vendored" ]; then
+    printf '%s\n' "$vendored"
+    return 0
+  fi
+  local dir
+  while IFS= read -r -d: dir; do
+    dir="${dir%/}"
+    [ "${dir##*/}" = depot_tools ] && continue
+    [ -f "$dir/ninja$EXE_SUFFIX" ] && { printf '%s\n' "$dir/ninja$EXE_SUFFIX"; return 0; }
+  done <<<"$PATH:"
+  return 1
+}
+
+siso_bin() {
+  # The Siso the Siso path will end up running, mirroring depot_tools' siso.py:
+  # SISO_PATH wins, then <base>/third_party/siso/cipd/siso, then
+  # <base>/third_party/siso/siso -- for the first base of {primary solution,
+  # gclient root, gclient root/src} that has build/config/siso/.sisoenv, which
+  # in an Electron checkout is src/ and not the src/electron solution.
+  #
+  # Only used to report what is about to run: unlike Ninja, we hand the Siso
+  # build to autoninja, so this does not choose anything.
+  if [ -n "${SISO_PATH:-}" ]; then
+    printf '%s\n' "$SISO_PATH"
+    return 0
+  fi
+  local base p
+  for base in "$ELECTRON_PATH" "$ROOT_PATH" "$SRC_PATH"; do
+    [ -f "$base/build/config/siso/.sisoenv" ] || continue
+    for p in "$base/third_party/siso/cipd/siso$EXE_SUFFIX" \
+             "$base/third_party/siso/siso$EXE_SUFFIX"; do
+      [ -f "$p" ] && { printf '%s\n' "$p"; return 0; }
+    done
+  done
+  return 1
+}
+
+log_build_driver() {
+  # Which binary is about to do the building, and its version. Worth a line in
+  # every build and not just a verbose one: the choice is made by depot_tools'
+  # resolution rules rather than by anything visible in this script's output,
+  # it differs per host (a vendored ninja, a NINJA_BIN of your own, a SISO_PATH
+  # artifact from CI), and when a build log gets thrown away or a step behaves
+  # oddly it is the first thing worth knowing.
+  # Probed from the directory the build itself runs in, because the answer can
+  # depend on it: depot_tools' own `ninja` is a wrapper around ninja.py, which
+  # prefers the checkout's third_party/ninja and only falls back to PATH
+  # outside one. Pointed at that wrapper, NINJA_BIN reports the version of
+  # whatever it delegates to here -- which is the version that will build, and
+  # the point of printing this at all.
+  local bin="$1" version
+  version=$(cd "$SRC_PATH" 2>/dev/null && "$bin" --version 2>/dev/null | head -n1) \
+      || version=""
+  log "${CYA} Using %s%s${c0}\n" "$bin" "${version:+ ($version)}"
+}
+
+check_ninja_identity() {
+  # Ninja's build log format is versioned, and a ninja that meets a log from a
+  # different version throws it away:
+  #   ninja: warning: build log version is too new; starting over
+  # Every output then has no log entry, which ninja reads as dirty, so the next
+  # "incremental" build rebuilds the whole tree. Two ninjas in one out dir is
+  # all it takes -- 1.12.1 writes v6 and 1.13.2 writes v7 -- and the usual way
+  # in is a bare `ninja -C out/...` picking up a different binary than this
+  # script does. Remember which one built here and say so when it changes,
+  # because the warning itself scrolls past in a 60,000-step build.
+  local out="$1" bin="$2" stamp
+  stamp="$SRC_PATH/$out/.ninja_bin_used"
+  if [ -f "$stamp" ] && [ "$(cat "$stamp")" != "$bin" ]; then
+    warn "$out was last built by $(cat "$stamp"), now using $bin."
+    warn "Ninja discards a build log written by another version, which rebuilds everything. Stick to one."
+  fi
+  printf '%s\n' "$bin" > "$stamp" 2>/dev/null || true
+}
+
 autoninja() {
   # Args always carry -C <out dir>; find it to tell Siso and Ninja apart.
   local out="" i n
@@ -1003,6 +1110,7 @@ autoninja() {
   # ended up building with 34 jobs.
   flags+=(-j "$JOBS")
 
+  local cmd=()
   if [ -n "$out" ] && uses_siso "$out"; then
     # SISO_LIMITS is read by Siso itself, and covers the one case -j does not:
     # autoninja drops it with only a warning whenever the count exceeds the CPU
@@ -1011,13 +1119,38 @@ autoninja() {
     export SISO_LIMITS="${SISO_LIMITS_BASE:+$SISO_LIMITS_BASE,}local=$JOBS"
     log "${CYA} Limiting Siso to %s local jobs (SISO_LIMITS=%s)${c0}\n" \
         "$JOBS" "$SISO_LIMITS"
+    local siso
+    if siso=$(siso_bin); then
+      log_build_driver "$siso"
+    else
+      warn "No Siso binary found where depot_tools looks for one; autoninja will report the error."
+    fi
+    cmd=(dt autoninja)
   else
+    # Drive Ninja ourselves rather than through autoninja, so NINJA_BIN can
+    # choose the binary (see ninja_bin). What autoninja adds for a plain Ninja
+    # build is small and reproduced here: -j, which we already pass and which is
+    # the whole reason this wrapper exists, and -d stats under
+    # NINJA_SUMMARIZE_BUILD. The rest of it is remote execution setup, the
+    # Android build server, and uploading the ninjalog to Google -- none of
+    # which apply to a local build of ours.
+    local bin
+    if [ -n "${NINJA_BIN:-}" ] \
+        && { [ ! -f "${NINJA_BIN}" ] || [ ! -x "${NINJA_BIN}" ]; }; then
+      error_exit "NINJA_BIN='$NINJA_BIN' is not an executable file"
+    fi
+    bin=$(ninja_bin) \
+        || error_exit "No ninja found: install one on PATH or set NINJA_BIN"
     log "${CYA} Limiting Ninja to %s jobs${c0}\n" "$JOBS"
+    log_build_driver "$bin"
+    [ "${NINJA_SUMMARIZE_BUILD:-}" = 1 ] && flags+=(-d stats)
+    [ -n "$out" ] && check_ninja_identity "$out" "$bin"
+    cmd=("$bin")
   fi
 
   cd "$SRC_PATH" || error_exit "Unable to enter $SRC_PATH"
   VERBOSE=1 execute "Building $* (this takes a long time)" "Build failed" \
-      dt autoninja "${flags[@]}" "$@"
+      "${cmd[@]}" "${flags[@]}" "$@"
 }
 
 ffmpeg_out_dir() {
