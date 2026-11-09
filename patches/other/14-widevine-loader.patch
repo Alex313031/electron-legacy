@@ -1,0 +1,419 @@
+Title: Load a Widevine CDM from --widevine-cdm-path
+Origin: electron-legacy (this repo)
+
+Lets Electron load the Widevine CDM, so encrypted media (Netflix, Hulu, Spotify)
+reaches the decryptor instead of failing at
+navigator.requestMediaKeySystemAccess(). Needs `enable_widevine = true` in the
+GN args, which assets/args/*.gn sets.
+
+No CDM is bundled and none is downloaded: there is no component updater in
+Electron (BrowserProcessImpl::component_updater() returns nullptr), so the CDM
+has to be supplied with --widevine-cdm-path. Nothing is registered without it,
+which keeps a build that was never pointed at a CDM behaving exactly as before.
+
+Two directory layouts are accepted:
+
+  - A Chromium component directory: manifest.json at the top level, library
+    under _platform_specific/win_x64/ (or win_x86/). The manifest is
+    authoritative, so codecs, encryption schemes and the version all come from
+    the CDM itself, and --widevine-cdm-version is not needed. This is the
+    layout Chrome's own component updater leaves behind, so the CDM can be
+    copied straight out of a Chrome install:
+      .../Google/Chrome/Application/<ver>/WidevineCdm
+  - A flat directory holding just widevinecdm.dll, which is what Electron's
+    --widevine-cdm-path has always meant. There is no manifest, so the
+    capability is stated in code and --widevine-cdm-version must give the
+    CDM's version. That stated list includes HEVC, which Chromium only offers
+    where a platform decoder backs it; this fork software-decodes it, so
+    encrypted HEVC is worth advertising even on a machine with no HEVC support
+    of its own.
+
+Because enable_widevine_cdm_host_verification requires is_chrome_branded, these
+builds do no VMP (Verified Media Path) signing, and without a VMP signature a
+CDM is only trusted at Widevine security level 3. Sites that insist on L1 are
+expected to refuse to play; this is for testing, and for sites that accept L3.
+castlabs' fork (https://github.com/castlabs/electron-releases) is the option for
+anyone who needs real VMP signing.
+
+Most of what this touches is not new code but dead code. Electron's Widevine
+support has always been behind BUILDFLAG(ENABLE_WIDEVINE), which is false
+unless is_chrome_branded, so none of it has been compiled in years and all of
+it had rotted past the point of building:
+
+  - media::EncryptionMode became media::EncryptionScheme
+  - media::VideoCodec::kCodecVP8 and friends lost their kCodec prefix
+  - media::CdmProxy, and so CdmProxy::Protocol, were deleted outright
+  - content::CdmCapability moved to media::CdmCapability, and its video codec
+    list became a std::map<VideoCodec, VideoCodecInfo> rather than a vector
+  - content::CdmInfo's constructor is now
+    (key_system, Robustness, capability, supports_sub_key_systems, name,
+    CdmType, path), where it used to take a GUID and a file system id
+  - kWidevineCdmGuid and kWidevineCdmFileSystemId no longer exist; a single
+    media::CdmType kWidevineCdmType replaced both
+  - widevine_cdm_common.h, which declares every one of those constants, was
+    never included in the first place
+
+Registration is therefore rewritten against the current APIs, following
+CreateCdmInfoFromWidevineDirectory() in //chrome/common/media/cdm_registration.cc
+so the component path behaves the way Chrome's does. The old code also only
+assigned *cdm_path on the first call while caching its "found" answer in a
+static, so a second call reported an available CDM at an empty path; reading the
+path out of the cache instead fixes that.
+
+The renderer half was never wired up at all, which is the part that would still
+have failed even after the browser side compiled. renderer_client_base.cc
+included chrome/renderer/media/chrome_key_systems.h under ENABLE_WIDEVINE but
+never called GetChromeKeySystems(), and RendererClientBase did not override
+ContentRendererClient::GetSupportedKeySystems(), so Blink was never told the
+registered CDM existed. GetChromeKeySystems() is a four-line wrapper around
+cdm::GetSupportedKeySystemsUpdates() whose only addition is passing
+can_persist_data=false for incognito profiles -- and only persistent-license
+support reads that, which this CDM does not advertise -- so Electron calls
+//components/cdm/renderer directly and takes no dependency on chrome/renderer.
+
+//components/cdm/common and //components/cdm/renderer both restrict visibility
+to the embedders Chromium ships, so //electron/* is added to those two lists.
+
+diff --git a/components/cdm/common/BUILD.gn b/components/cdm/common/BUILD.gn
+--- a/components/cdm/common/BUILD.gn
++++ b/components/cdm/common/BUILD.gn
+@@ -21,6 +21,7 @@
+     "//chromecast/*",
+     "//components/cdm/*",
+     "//content/shell/*",
++    "//electron/*",
+     "//fuchsia_web/*",
+   ]
+ 
+diff --git a/components/cdm/renderer/BUILD.gn b/components/cdm/renderer/BUILD.gn
+--- a/components/cdm/renderer/BUILD.gn
++++ b/components/cdm/renderer/BUILD.gn
+@@ -13,6 +13,7 @@
+     "//chromecast/*",
+     "//components/cdm/*",
+     "//content/shell/*",
++    "//electron/*",
+     "//fuchsia_web/*",
+   ]
+ 
+diff --git a/electron/BUILD.gn b/electron/BUILD.gn
+--- a/electron/BUILD.gn
++++ b/electron/BUILD.gn
+@@ -12,6 +12,7 @@
+ import("//testing/test.gni")
+ import("//third_party/electron_node/node.gni")
+ import("//third_party/ffmpeg/ffmpeg_options.gni")
++import("//third_party/widevine/cdm/widevine.gni")
+ import("//tools/generate_library_loader/generate_library_loader.gni")
+ import("//tools/grit/grit_rule.gni")
+ import("//tools/grit/repack.gni")
+@@ -620,6 +621,24 @@
+     deps += [ ":mksnapshot_checksum_gen" ]
+   }
+ 
++  if (enable_widevine) {
++    # The CDM manifest parser and the renderer-side key system registration.
++    # Both targets restrict visibility to the embedders Chromium ships, so this
++    # patch adds //electron/* to those lists as well.
++    #
++    # //media covers the media/base includes and, through the //media/cdm
++    # roll-up, supported_audio_codecs.h -- that roll-up is deliberately only
++    # visible to //media itself, so it must not be DEPed directly. cdm_paths is
++    # its own target and does have to be named. This is the same pair
++    # //chrome/common takes for cdm_registration.cc.
++    deps += [
++      "//components/cdm/common",
++      "//components/cdm/renderer",
++      "//media",
++      "//media/cdm:cdm_paths",
++    ]
++  }
++
+   public_deps = [
+     "//base",
+     "//base:i18n",
+diff --git a/electron/shell/app/electron_content_client.cc b/electron/shell/app/electron_content_client.cc
+--- a/electron/shell/app/electron_content_client.cc
++++ b/electron/shell/app/electron_content_client.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "shell/app/electron_content_client.h"
+ 
++#include <memory>
++#include <optional>
+ #include <string>
+ #include <string_view>
+ #include <vector>
+@@ -28,9 +30,19 @@
+ #include "url/url_constants.h"
+ 
+ #if BUILDFLAG(ENABLE_WIDEVINE)
++#include "base/logging.h"
+ #include "base/native_library.h"
++#include "base/version.h"
++#include "components/cdm/common/cdm_manifest.h"
+ #include "content/public/common/cdm_info.h"
++#include "media/base/cdm_capability.h"
++#include "media/base/content_decryption_module.h"
++#include "media/base/encryption_scheme.h"
+ #include "media/base/video_codecs.h"
++#include "media/cdm/cdm_paths.h"
++#include "media/cdm/supported_audio_codecs.h"
++#include "media/media_buildflags.h"
++#include "third_party/widevine/cdm/widevine_cdm_common.h"
+ #endif  // BUILDFLAG(ENABLE_WIDEVINE)
+ 
+ #if BUILDFLAG(ENABLE_PDF_VIEWER)
+@@ -47,55 +59,107 @@
+ 
+ namespace {
+ 
+-enum class WidevineCdmFileCheck {
+-  kNotChecked,
+-  kFound,
+-  kNotFound,
+-};
+-
+ #if BUILDFLAG(ENABLE_WIDEVINE)
+-bool IsWidevineAvailable(
+-    base::FilePath* cdm_path,
+-    std::vector<media::VideoCodec>* codecs_supported,
+-    base::flat_set<media::CdmSessionType>* session_types_supported,
+-    base::flat_set<media::EncryptionMode>* modes_supported) {
+-  static WidevineCdmFileCheck widevine_cdm_file_check =
+-      WidevineCdmFileCheck::kNotChecked;
+-
+-  if (widevine_cdm_file_check == WidevineCdmFileCheck::kNotChecked) {
+-    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-    *cdm_path = command_line->GetSwitchValuePath(switches::kWidevineCdmPath);
+-    if (!cdm_path->empty()) {
+-      *cdm_path = cdm_path->AppendASCII(
+-          base::GetNativeLibraryName(kWidevineCdmLibraryName));
+-      widevine_cdm_file_check = base::PathExists(*cdm_path)
+-                                    ? WidevineCdmFileCheck::kFound
+-                                    : WidevineCdmFileCheck::kNotFound;
++// Describes the Widevine CDM rooted at |cdm_base_path|, which is whatever
++// --widevine-cdm-path pointed at. Two layouts are accepted:
++//
++//  - A Chromium component directory: manifest.json at the top level and the
++//    library under _platform_specific/<os>_<arch>/. The manifest is
++//    authoritative, so the codecs, encryption schemes and version all come
++//    from the CDM itself. This mirrors CreateCdmInfoFromWidevineDirectory()
++//    in //chrome/common/media/cdm_registration.cc, which is how Chrome reads
++//    a component-updated CDM.
++//  - A flat directory holding just the library, which is what Electron's
++//    --widevine-cdm-path has always meant. There is no manifest to read, so
++//    the capability is stated below and the version has to arrive separately
++//    via --widevine-cdm-version.
++//
++// Returns nullopt when there is no usable CDM, which is the normal case: these
++// builds ship no CDM and register nothing unless asked to.
++std::optional<content::CdmInfo> CreateWidevineCdmInfo(
++    const base::FilePath& cdm_base_path) {
++  const std::string library_name =
++      base::GetNativeLibraryName(kWidevineCdmLibraryName);
++
++  // Component layout first: its manifest is better information than anything
++  // this code could assume on the CDM's behalf.
++  const base::FilePath manifest_path =
++      cdm_base_path.Append(FILE_PATH_LITERAL("manifest.json"));
++  if (base::PathExists(manifest_path)) {
++    const base::FilePath library_path =
++        media::GetPlatformSpecificDirectory(cdm_base_path)
++            .AppendASCII(library_name);
++    if (!base::PathExists(library_path)) {
++      LOG(ERROR) << "Widevine: manifest at " << manifest_path
++                 << " but no CDM at " << library_path;
++      return std::nullopt;
+     }
+-  }
+ 
+-  if (widevine_cdm_file_check == WidevineCdmFileCheck::kFound) {
+-    // Add the supported codecs as if they came from the component manifest.
+-    // This list must match the CDM that is being bundled with Chrome.
+-    codecs_supported->push_back(media::VideoCodec::kCodecVP8);
+-    codecs_supported->push_back(media::VideoCodec::kCodecVP9);
+-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+-    codecs_supported->push_back(media::VideoCodec::kCodecH264);
+-#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
++    media::CdmCapability capability;
++    if (!ParseCdmManifestFromPath(manifest_path, &capability)) {
++      LOG(ERROR) << "Widevine: manifest at " << manifest_path
++                 << " is malformed, or its CDM is too old for this build";
++      return std::nullopt;
++    }
+ 
+-    // TODO(crbug.com/767941): Push persistent-license support info here once
+-    // we check in a new CDM that supports it on Linux.
+-    session_types_supported->insert(media::CdmSessionType::kTemporary);
+-#if BUILDFLAG(IS_CHROMEOS)
+-    session_types_supported->insert(media::CdmSessionType::kPersistentLicense);
+-#endif  // BUILDFLAG(IS_CHROMEOS)
++    return content::CdmInfo(
++        kWidevineKeySystem, content::CdmInfo::Robustness::kSoftwareSecure,
++        std::move(capability), /*supports_sub_key_systems=*/false,
++        kWidevineCdmDisplayName, kWidevineCdmType, library_path);
++  }
+ 
+-    modes_supported->insert(media::EncryptionMode::kCenc);
++  // Flat layout.
++  const base::FilePath library_path = cdm_base_path.AppendASCII(library_name);
++  if (!base::PathExists(library_path)) {
++    LOG(ERROR) << "Widevine: no " << library_name << " in " << cdm_base_path
++               << ", and no manifest.json either";
++    return std::nullopt;
++  }
+ 
+-    return true;
++  const base::Version version(
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          switches::kWidevineCdmVersion));
++  if (!version.IsValid()) {
++    LOG(ERROR) << "Widevine: found a CDM at " << library_path
++               << " but --widevine-cdm-version is missing or malformed. Pass "
++                  "the CDM's own version, or point --widevine-cdm-path at a "
++                  "directory that has the CDM's manifest.json in it.";
++    return std::nullopt;
+   }
+ 
+-  return false;
++  media::CdmCapability capability;
++  capability.version = version;
++
++  // Audio is decrypt-only: the CDM hands the samples back and the browser
++  // decodes them, so this is the browser's codec list rather than the CDM's.
++  capability.audio_codecs = media::GetCdmSupportedAudioCodecs();
++
++  // An empty profile set means every profile of that codec is supported.
++  const media::VideoCodecInfo kAllProfiles;
++  capability.video_codecs.emplace(media::VideoCodec::kVP8, kAllProfiles);
++  capability.video_codecs.emplace(media::VideoCodec::kVP9, kAllProfiles);
++#if BUILDFLAG(USE_PROPRIETARY_CODECS)
++  capability.video_codecs.emplace(media::VideoCodec::kH264, kAllProfiles);
++#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
++#if BUILDFLAG(ENABLE_PLATFORM_HEVC)
++  // Chromium only offers HEVC here where a platform decoder backs it. This
++  // fork software-decodes it (patches/other/12), so encrypted HEVC is worth
++  // advertising even when the platform has nothing -- which on legacy Windows
++  // is the usual case.
++  capability.video_codecs.emplace(media::VideoCodec::kHEVC, kAllProfiles);
++#endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
++
++  capability.encryption_schemes.insert(media::EncryptionScheme::kCenc);
++  capability.encryption_schemes.insert(media::EncryptionScheme::kCbcs);
++
++  // Temporary sessions only. A persistent license needs both a CDM built to
++  // store one and a place to put it, and neither is arranged here.
++  capability.session_types.insert(media::CdmSessionType::kTemporary);
++
++  return content::CdmInfo(
++      kWidevineKeySystem, content::CdmInfo::Robustness::kSoftwareSecure,
++      std::move(capability), /*supports_sub_key_systems=*/false,
++      kWidevineCdmDisplayName, kWidevineCdmType, library_path);
+ }
+ #endif  // BUILDFLAG(ENABLE_WIDEVINE)
+ 
+@@ -193,29 +257,17 @@
+     std::vector<media::CdmHostFilePath>* cdm_host_file_paths) {
+   if (cdms) {
+ #if BUILDFLAG(ENABLE_WIDEVINE)
+-    base::FilePath cdm_path;
+-    std::vector<media::VideoCodec> video_codecs_supported;
+-    base::flat_set<media::CdmSessionType> session_types_supported;
+-    base::flat_set<media::EncryptionMode> encryption_modes_supported;
+-    if (IsWidevineAvailable(&cdm_path, &video_codecs_supported,
+-                            &session_types_supported,
+-                            &encryption_modes_supported)) {
+-      base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-      auto cdm_version_string =
+-          command_line->GetSwitchValueASCII(switches::kWidevineCdmVersion);
+-      // CdmInfo needs |path| to be the actual Widevine library,
+-      // not the adapter, so adjust as necessary. It will be in the
+-      // same directory as the installed adapter.
+-      const base::Version version(cdm_version_string);
+-      DCHECK(version.IsValid());
+-
+-      content::CdmCapability capability(
+-          video_codecs_supported, encryption_modes_supported,
+-          session_types_supported, base::flat_set<media::CdmProxy::Protocol>());
+-
+-      cdms->push_back(content::CdmInfo(
+-          kWidevineCdmDisplayName, kWidevineCdmGuid, version, cdm_path,
+-          kWidevineCdmFileSystemId, capability, kWidevineKeySystem, false));
++    // Nothing is registered unless a path was given: there is no component
++    // updater here to go and fetch a CDM, so --widevine-cdm-path is the only
++    // way one ever arrives.
++    const base::FilePath cdm_base_path =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
++            switches::kWidevineCdmPath);
++    if (!cdm_base_path.empty()) {
++      if (std::optional<content::CdmInfo> widevine =
++              CreateWidevineCdmInfo(cdm_base_path)) {
++        cdms->push_back(std::move(widevine).value());
++      }
+     }
+ #endif  // BUILDFLAG(ENABLE_WIDEVINE)
+   }
+diff --git a/electron/shell/renderer/renderer_client_base.h b/electron/shell/renderer/renderer_client_base.h
+--- a/electron/shell/renderer/renderer_client_base.h
++++ b/electron/shell/renderer/renderer_client_base.h
+@@ -11,6 +11,12 @@
+ 
+ #include "content/public/renderer/content_renderer_client.h"
+ #include "electron/buildflags/buildflags.h"
++#include "third_party/widevine/cdm/buildflags.h"
++
++#if BUILDFLAG(ENABLE_WIDEVINE)
++#include "media/base/key_system_info.h"
++#include "media/base/key_systems_support_registration.h"
++#endif
+ 
+ #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
+ #include "services/service_manager/public/cpp/binder_registry.h"
+@@ -125,6 +131,11 @@
+   v8::Local<v8::Object> GetScriptableObject(
+       const blink::WebElement& plugin_element,
+       v8::Isolate* isolate) override;
++#if BUILDFLAG(ENABLE_WIDEVINE)
++  std::unique_ptr<media::KeySystemSupportRegistration> GetSupportedKeySystems(
++      content::RenderFrame* render_frame,
++      media::GetSupportedKeySystemsCB cb) override;
++#endif  // BUILDFLAG(ENABLE_WIDEVINE)
+ 
+   void RunScriptsAtDocumentStart(content::RenderFrame* render_frame) override;
+   void RunScriptsAtDocumentEnd(content::RenderFrame* render_frame) override;
+diff --git a/electron/shell/renderer/renderer_client_base.cc b/electron/shell/renderer/renderer_client_base.cc
+--- a/electron/shell/renderer/renderer_client_base.cc
++++ b/electron/shell/renderer/renderer_client_base.cc
+@@ -68,7 +68,7 @@
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_WIDEVINE)
+-#include "chrome/renderer/media/chrome_key_systems.h"  // nogncheck
++#include "components/cdm/renderer/key_system_support_update.h"
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
+@@ -485,6 +485,22 @@
+       render_frame);
+ }
+ 
++#if BUILDFLAG(ENABLE_WIDEVINE)
++std::unique_ptr<media::KeySystemSupportRegistration>
++RendererClientBase::GetSupportedKeySystems(content::RenderFrame* render_frame,
++                                           media::GetSupportedKeySystemsCB cb) {
++  // Without this the key system the browser registered is never reported to
++  // Blink, and requestMediaKeySystemAccess('com.widevine.alpha') rejects even
++  // though a CDM was found. Chrome reaches the same call through
++  // GetChromeKeySystems(); the only thing that wrapper adds is passing
++  // can_persist_data=false for incognito profiles, and nothing but
++  // persistent-license support reads that -- which the CDM registered here
++  // does not advertise.
++  return cdm::GetSupportedKeySystemsUpdates(
++      render_frame, /*can_persist_data=*/true, std::move(cb));
++}
++#endif  // BUILDFLAG(ENABLE_WIDEVINE)
++
+ void RendererClientBase::RunScriptsAtDocumentStart(
+     content::RenderFrame* render_frame) {
+ #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)

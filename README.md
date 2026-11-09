@@ -28,10 +28,10 @@ For an overview how Electron works, see [ELECTRON_DESIGN.md](./docs/ELECTRON_DES
 
 Legacy Windows support is based on patches from [Electron-for-windows-7](https://github.com/e3kskoy7wqk/Electron-for-windows-7). It is worth noting that
 the first person to get Electron back working on Win7 was the [Supermium](https://github.com/win32ss/supermium) (Chromium fork that supports XP+) author's
-[fork of Electron](https://github.com/win32ss/supermium-electron). Some NodeJS patches for making Node + Installer standalone came from my
-[nodejs-win7 repo](https://github.com/Alex313031/nodejs-win7). HEVC/AC3 software decoding support was added from code from Thorium, however the
-original sources for these patches come from [ThaUnknown's Electron](https://github.com/ThaUnknown/electron-chromium-codecs) and
-[StaZhu's Chromium/Electron HEVC patches](https://github.com/StaZhu/enable-chromium-hevc-hardware-decoding).
+[fork of Electron](https://github.com/win32ss/supermium-electron).  
+Some NodeJS patches for making Node + Installer standalone came from my [nodejs-win7 repo](https://github.com/Alex313031/nodejs-win7).  
+HEVC/AC3 software decoding support was added from code from Thorium, however the original sources for these patches come from 
+[ThaUnknown's Electron](https://github.com/ThaUnknown/electron-chromium-codecs) and [StaZhu's Chromium/Electron HEVC patches](https://github.com/StaZhu/enable-chromium-hevc-hardware-decoding).
 
 ## License
 

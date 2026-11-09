@@ -53,6 +53,11 @@ enable_platform_encrypted_dolby_vision = true
 enable_platform_mpeg_h_audio = true
 enable_platform_dts_audio = true
 
+# Build the Widevine CDM host, so encrypted media (Netflix, Spotify) works when
+# Electron is pointed at a CDM with --widevine-cdm-path; see
+# patches/other/14-widevine-loader.patch.
+enable_widevine = true
+
 # Full debug info: the reason to build this configuration at all. Expect a
 # much larger out dir and link time than release.
 symbol_level = 2

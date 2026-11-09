@@ -1,7 +1,7 @@
 BSD 3-Clause License
 
-Copyright (c) 2026-2026, Alexander Frick <alex313031>
-Copyright (c) 2025-2026, e3kskoy7wqk <e3kskoy7wqk>
+Copyright (c) 2026-2026, Alexander Frick <alex313031>  
+Copyright (c) 2025-2026, e3kskoy7wqk <e3kskoy7wqk>  
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without

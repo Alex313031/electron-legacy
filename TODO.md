@@ -29,4 +29,9 @@
    `build.sh` would silently skip the node series if the submodule isn't checked out
  - Restore XP/Vista support
  - Restore pre CR23 UI eyedrop on menu
- - Add component Widevine load patch (it won't be L1 verified because no signature, but at least for testing it will load like Chromium)
+ - Fetch the Widevine CDM rather than being handed one. `patches/other/14` loads a CDM from
+   `--widevine-cdm-path` and reads its `manifest.json` the way Chrome reads a component-updated
+   one, but nothing downloads it: `BrowserProcessImpl::component_updater()` returns nullptr and
+   Chromium's installer policy lives in `chrome/browser/component_updater`, which Electron doesn't
+   link. Either a small fetcher against the component-update endpoint, or a real
+   `ComponentUpdateService`. L1/L2 stays out of reach either way without VMP signing certs
