@@ -29,20 +29,27 @@ state, so no decision of ours is hidden in those files.
 
 Two notes on what came across from Thorium:
 
-fmtconvert, which is the fix in "ported with a fix". ffmpeg's configure says
+fmtconvert, which is the fix in "ported with a fix", and which is version skew
+rather than a mistake in Thorium's patch. Electron 44 pins ffmpeg 2b68d2ba
+(Chromium 152), where
   ac3_decoder_select="ac3_parser ac3dsp bswapdsp fmtconvert"
-and Thorium's patch enables the first three. ac3dec_float.c includes ac3dec.c,
-which calls ff_fmt_convert_init() with no CONFIG guard around it, so every
-platform that compiles the file fails at link time:
+and ac3dec_float.c includes ac3dec.c, which calls ff_fmt_convert_init() with no
+CONFIG guard around it. Enabling only the first three therefore fails at link:
   lld-link: error: undefined symbol: ff_fmt_convert_init
   >>> referenced by third_party/ffmpeg/libavcodec/ac3dec_float.c
+Upstream ffmpeg has since dropped FmtConvertContext from the AC-3 decoder.
+Thorium builds against ffmpeg 9db86ce5 (Chromium 156), where
+libavcodec/fmtconvert.c does not exist, configure does not select it, and there
+is no CONFIG_FMTCONVERT macro at all -- so its patch is complete for its own
+tree, and this part is ours to carry until an ffmpeg roll makes it unnecessary.
+Whoever does that roll should delete these entries rather than rebase them.
+
 This patch therefore also sets CONFIG_FMTCONVERT in those 9 configs and adds
-libavcodec/fmtconvert.c plus the per-arch init that fmtconvert.c dispatches to
--- x86, aarch64, arm and riscv, taken from libavcodec/*/Makefile. All four are
-needed, not just x86: ac3dec_float.c is added in the block that covers every
-Chrome config, so fmtconvert.c compiles on arm and riscv64 too and wants its
-ff_fmt_convert_init_arm / _riscv there. Worth reporting upstream to Thorium,
-where the same link failure is latent on all nine platforms.
+libavcodec/fmtconvert.c plus the per-arch init it dispatches to -- x86,
+aarch64, arm and riscv, from libavcodec/*/Makefile. All four are needed, not
+just x86: ac3dec_float.c is added in the block that covers every Chrome config,
+so fmtconvert.c compiles on arm and riscv64 too and wants its
+ff_fmt_convert_init_arm / _riscv there.
 
 The AudioToolbox macros (CONFIG_AC3_AT_DECODER, CONFIG_EAC3_AT_DECODER) are
 flipped to 1 in every config Thorium touched, including the Windows and Linux
