@@ -9,7 +9,5 @@
 09-patch-docs.patch
 10-restore-isaeroglassenabled.patch
 11-angle-d3d9-port.patch
-12-add-hevc-ffmpeg-decoder-parser.patch
-13-add-ac3-eac3-ffmpeg-decoders.patch
-14-enable-hevc-ffmpeg-decoding.patch
-15-enable-mpeg2-ac3-eac3-decoding.patch
+12-hevc-software-decoding.patch
+13-ac3-eac3-mpeg2-software-decoding.patch

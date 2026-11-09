@@ -1,16 +1,26 @@
-Title: Build ffmpeg's AC-3 and E-AC-3 decoders
-Origin: Thorium (other/add-ac3-eac3-ffmpeg-decoders.patch), ported with a fix
+Title: Software-decode AC-3, E-AC-3 and MPEG-2 with ffmpeg
+Origin: Thorium (other/add-ac3-eac3-ffmpeg-decoders.patch and
+        other/enable-mpeg2-ac3-eac3-decoding.patch), ported and merged
 
-The audio counterpart to 12-add-hevc-ffmpeg-decoder-parser.patch, and the
-reason HEVC is worth having: a 4K HEVC file on the web is usually carrying
-AC-3 or E-AC-3 audio, and a video that decodes to silence is not much better
-than one that does not decode. Chromium leaves these to the platform for the
-same licensing reasons it leaves HEVC there.
+The audio counterpart to the HEVC patch before it, and the reason that one is
+worth having: a 4K HEVC file on the web is usually carrying AC-3 or E-AC-3
+audio, and a video that decodes to silence is not much better than one that
+does not decode at all. Chromium leaves these to the platform for the same
+licensing reasons it leaves HEVC there.
 
-Applies on top of patch 12 -- both edit the same generated configs and the same
-ffmpeg_generated.gni blocks, so the order in series matters.
+Applies after the HEVC patch and contains no HEVC changes. It does rely on one
+thing from it: bswapdsp, which ffmpeg's configure selects for both
+hevc_decoder and ac3_decoder, is enabled there.
 
-  chromium/config/Chrome/*/*/config.h
+MPEG-2 video rides along, as it does in Thorium's second patch. It is two lines
+in supported_types.cc and the decoder is already in the ffmpeg configs; nothing
+on the modern web needs it, but local files and old streams still exist. It is
+the one thing in here that is not AC-3, and splitting it into a third patch
+would be a two-line patch.
+
+The ffmpeg half.
+
+  third_party/ffmpeg/chromium/config/Chrome/*/*/config.h
                           CONFIG_AC3DSP and CONFIG_FMTCONVERT.
   .../config_components.h CONFIG_AC3_DECODER, CONFIG_AC3_FIXED_DECODER,
                           CONFIG_EAC3_DECODER, CONFIG_AC3_PARSER,
@@ -19,19 +29,18 @@ ffmpeg_generated.gni blocks, so the order in series matters.
   .../libavcodec/codec_list.c, .../parser_list.c
                           ff_ac3_decoder, ff_eac3_decoder,
                           ff_ac3_fixed_decoder, ff_ac3_parser.
-  ffmpeg_generated.gni    libavcodec/ac3*, libavformat/ac3dec.c, and the x86 and
-                          aarch64 ac3dsp.
+  third_party/ffmpeg/ffmpeg_generated.gni
+                          libavcodec/ac3*, libavformat/ac3dec.c, and the x86
+                          and aarch64 ac3dsp.
 
 Unlike HEVC, which this series enables everywhere, AC-3 lands in 9 of the 18
-configs -- the ones Thorium builds: win/{x64,ia32,arm64}, linux/{x64,ia32,arm64},
-mac/{x64,arm64} and android/arm64. The rest keep it off, which is upstream's
-state, so no decision of ours is hidden in those files.
+configs -- the ones Thorium builds: win/{x64,ia32,arm64},
+linux/{x64,ia32,arm64}, mac/{x64,arm64} and android/arm64. The rest keep it
+off, which is upstream's state, so no decision of ours is hidden in those
+files.
 
-Two notes on what came across from Thorium:
-
-fmtconvert, which is the fix in "ported with a fix", and which is version skew
-rather than a mistake in Thorium's patch. Electron 44 pins ffmpeg 2b68d2ba
-(Chromium 152), where
+fmtconvert is version skew rather than a mistake in Thorium's patch. Electron
+44 pins ffmpeg 2b68d2ba (Chromium 152), where
   ac3_decoder_select="ac3_parser ac3dsp bswapdsp fmtconvert"
 and ac3dec_float.c includes ac3dec.c, which calls ff_fmt_convert_init() with no
 CONFIG guard around it. Enabling only the first three therefore fails at link:
@@ -44,7 +53,7 @@ is no CONFIG_FMTCONVERT macro at all -- so its patch is complete for its own
 tree, and this part is ours to carry until an ffmpeg roll makes it unnecessary.
 Whoever does that roll should delete these entries rather than rebase them.
 
-This patch therefore also sets CONFIG_FMTCONVERT in those 9 configs and adds
+So this patch also sets CONFIG_FMTCONVERT in those 9 configs and adds
 libavcodec/fmtconvert.c plus the per-arch init it dispatches to -- x86,
 aarch64, arm and riscv, from libavcodec/*/Makefile. All four are needed, not
 just x86: ac3dec_float.c is added in the block that covers every Chrome config,
@@ -58,12 +67,100 @@ ffmpeg_generated.gni and its registrations from codec_list.c, and neither names
 audiotoolboxdec.c or ff_ac3_at_decoder -- so this keeps them rather than
 introducing a second kind of difference from Thorium to maintain.
 
-Verified by building third_party/ffmpeg:ffmpeg for win/x64: ffmpeg.dll carries
-"ATSC A/52A (AC-3)" and "ATSC A/52B (AC-3, E-AC-3)", and fmtconvert.obj is in
-the link.
+The media half.
 
+  media/base/supported_types.cc
+                          IsDecoderDolbyAc3Eac3Supported answers yes when
+                          ffmpeg is built, ahead of the mojo/platform path that
+                          otherwise asks a hardware decoder. kMPEG2 moves out
+                          of the unconditional-false arm of
+                          IsDefaultDecoderSupportedVideoType and returns true.
+  media/ffmpeg/ffmpeg_common.cc
+                          AudioCodecToCodecID maps kAC3 and kEAC3 to their
+                          AVCodecIDs, without which the decoder is selected and
+                          then handed AV_CODEC_ID_NONE, and
+                          GetAllowedAudioDecoders gains ",ac3,eac3".
+  media/filters/ffmpeg_glue.cc
+                          the ac3 and eac3 demuxers, so a bare .ac3 or .eac3
+                          stream is openable and not only AC-3 inside MP4.
+
+The AC-3 paths stay behind ENABLE_PLATFORM_AC3_EAC3_AUDIO, as upstream has
+them, so this does not reach into builds that do not ask for those codecs.
+
+Verified by building third_party/ffmpeg:ffmpeg for win/x64 with both patches
+applied: `ninja -t inputs ffmpeg.dll` then lists ac3dec_float, ac3dec_fixed,
+ac3dec, ac3dsp, ac3tab, ac3, ac3dec_data, eac3dec, eac3_data, fmtconvert and
+fmtconvert_init alongside the hevc objects. The media half compiles:
+supported_types, ffmpeg_common, ffmpeg_video_decoder and ffmpeg_glue.
+
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index b4c9a885bf..0661efc7a7 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -312,7 +312,9 @@ bool IsDecoderDolbyVisionProfileSupported(const VideoType& type) {
+ 
+ bool IsDecoderDolbyAc3Eac3Supported(const AudioType& type) {
+ #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+-#if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER) && \
++#if BUILDFLAG(ENABLE_FFMPEG)
++  return true;
++#elif BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER) && \
+     (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC))
+   return GetSupplementalDecoderAudioTypeCache()->IsProfileSupported(type);
+ #else
+@@ -463,9 +465,10 @@ bool IsDefaultDecoderSupportedVideoType(const VideoType& type) {
+       return IsDecoderHevcProfileSupported(type);
+     case VideoCodec::kDolbyVision:
+       return IsDecoderDolbyVisionProfileSupported(type);
++    case VideoCodec::kMPEG2:
++      return true;
+     case VideoCodec::kUnknown:
+     case VideoCodec::kVC1:
+-    case VideoCodec::kMPEG2:
+     case VideoCodec::kMPEG4:
+       return false;
+   }
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index fe27fd56dc..4e17b3b780 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -185,6 +185,12 @@ AVCodecID AudioCodecToCodecID(AudioCodec audio_codec,
+   switch (audio_codec) {
+     case AudioCodec::kAAC:
+       return AV_CODEC_ID_AAC;
++#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
++    case AudioCodec::kAC3:
++      return AV_CODEC_ID_AC3;
++    case AudioCodec::kEAC3:
++      return AV_CODEC_ID_EAC3;
++#endif
+     case AudioCodec::kALAC:
+       return AV_CODEC_ID_ALAC;
+     case AudioCodec::kMP3:
+@@ -1119,7 +1125,7 @@ int32_t HashCodecName(const char* codec_name) {
+ 
+ const char* GetAllowedAudioDecoders() {
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+-#define EXTRA_CODECS ",aac"
++#define EXTRA_CODECS ",aac,ac3,eac3"
+ #else
+ #define EXTRA_CODECS
+ #endif
+diff --git a/media/filters/ffmpeg_glue.cc b/media/filters/ffmpeg_glue.cc
+index 6ecbf5d8b3..78203a2a7a 100644
+--- a/media/filters/ffmpeg_glue.cc
++++ b/media/filters/ffmpeg_glue.cc
+@@ -89,6 +89,8 @@ static const char* GetAllowedDemuxers() {
+                                                  "flac", "mp3",      "mov"};
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+     allowed_demuxers.push_back("aac");
++    allowed_demuxers.push_back("ac3");
++    allowed_demuxers.push_back("eac3");
+ #endif
+     return base::JoinString(allowed_demuxers, ",");
+   }());
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config.h b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config.h
-index ce91de9..d7f09b3 100644
+index ce91de9b9f..d7f09b3e04 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config.h
 @@ -729,7 +729,7 @@
@@ -85,7 +182,7 @@ index ce91de9..d7f09b3 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/config_components.h
 @@ -14,7 +14,7 @@
@@ -159,7 +256,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -171,7 +268,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -181,7 +278,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/android/arm64/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -192,7 +289,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config.h b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config.h
-index e1f5b92..c34ac29 100644
+index e1f5b92994..c34ac29eaf 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config.h
 @@ -729,7 +729,7 @@
@@ -214,7 +311,7 @@ index e1f5b92..c34ac29 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/config_components.h
 @@ -14,7 +14,7 @@
@@ -288,7 +385,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -300,7 +397,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -310,7 +407,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/arm64/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -321,7 +418,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config.h b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config.h
-index 21387eb..fbdfc15 100644
+index 21387ebdb4..fbdfc15646 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config.h
 @@ -728,7 +728,7 @@
@@ -343,7 +440,7 @@ index 21387eb..fbdfc15 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/config_components.h
 @@ -14,7 +14,7 @@
@@ -417,7 +514,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -429,7 +526,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -439,7 +536,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/ia32/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -450,7 +547,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config.h b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config.h
-index ca8dc1b..00a127a 100644
+index ca8dc1b8a0..00a127a9aa 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config.h
 @@ -728,7 +728,7 @@
@@ -472,7 +569,7 @@ index ca8dc1b..00a127a 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/config_components.h
 @@ -14,7 +14,7 @@
@@ -546,7 +643,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -558,7 +655,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -568,7 +665,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/linux/x64/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -579,7 +676,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config.h b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config.h
-index 3c56c48..87c18a0 100644
+index 3c56c480dd..87c18a0f62 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config.h
 @@ -729,7 +729,7 @@
@@ -601,7 +698,7 @@ index 3c56c48..87c18a0 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/config_components.h
 @@ -14,7 +14,7 @@
@@ -675,7 +772,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -687,7 +784,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -697,7 +794,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/arm64/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -708,7 +805,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config.h b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config.h
-index 1cf2699..7e9c801 100644
+index 1cf2699b8a..7e9c801898 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config.h
 @@ -728,7 +728,7 @@
@@ -730,7 +827,7 @@ index 1cf2699..7e9c801 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/config_components.h
 @@ -14,7 +14,7 @@
@@ -804,7 +901,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -816,7 +913,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -826,7 +923,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/mac/x64/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -837,7 +934,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config.h b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config.h
-index 4bccb3a..3801e79 100644
+index 4bccb3a950..3801e79d67 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config.h
 @@ -729,7 +729,7 @@
@@ -859,7 +956,7 @@ index 4bccb3a..3801e79 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/config_components.h
 @@ -14,7 +14,7 @@
@@ -933,7 +1030,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -945,7 +1042,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -955,7 +1052,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/arm64/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -966,7 +1063,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config.h b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config.h
-index b95f96f..06d4632 100644
+index b95f96f296..06d46322a3 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config.h
 @@ -728,7 +728,7 @@
@@ -988,7 +1085,7 @@ index b95f96f..06d4632 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/config_components.h
 @@ -14,7 +14,7 @@
@@ -1062,7 +1159,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -1074,7 +1171,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -1084,7 +1181,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/ia32/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -1095,7 +1192,7 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/x64/config.h b/third_party/ffmpeg/chromium/config/Chrome/win/x64/config.h
-index 43c0887..d85e35d 100644
+index 43c0887952..d85e35db3f 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/x64/config.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/x64/config.h
 @@ -728,7 +728,7 @@
@@ -1117,7 +1214,7 @@ index 43c0887..d85e35d 100644
  #define CONFIG_G722DSP 0
  #define CONFIG_GOLOMB 1
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/x64/config_components.h b/third_party/ffmpeg/chromium/config/Chrome/win/x64/config_components.h
-index 549cdbc..d3d5d07 100644
+index 549cdbcc18..d3d5d078d0 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/x64/config_components.h
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/x64/config_components.h
 @@ -14,7 +14,7 @@
@@ -1191,7 +1288,7 @@ index 549cdbc..d3d5d07 100644
  #define CONFIG_EVC_DEMUXER 0
  #define CONFIG_FFMETADATA_DEMUXER 0
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/codec_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/codec_list.c
-index c9666ae..7541512 100644
+index c9666ae199..75415127f1 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/codec_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/codec_list.c
 @@ -15,4 +15,7 @@ static const FFCodec * const codec_list[] = {
@@ -1203,7 +1300,7 @@ index c9666ae..7541512 100644
 +    &ff_ac3_fixed_decoder,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/parser_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/parser_list.c
-index 241c90b..b1dd669 100644
+index 241c90ba98..b1dd6691fe 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/parser_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavcodec/parser_list.c
 @@ -7,4 +7,5 @@ static const FFCodecParser * const parser_list[] = {
@@ -1213,7 +1310,7 @@ index 241c90b..b1dd669 100644
 +    &ff_ac3_parser,
      NULL };
 diff --git a/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavformat/demuxer_list.c b/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavformat/demuxer_list.c
-index 29f1f59..6fb0769 100644
+index 29f1f59381..6fb0769ce7 100644
 --- a/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavformat/demuxer_list.c
 +++ b/third_party/ffmpeg/chromium/config/Chrome/win/x64/libavformat/demuxer_list.c
 @@ -6,4 +6,6 @@ static const FFInputFormat * const demuxer_list[] = {
@@ -1224,15 +1321,13 @@ index 29f1f59..6fb0769 100644
 +    &ff_eac3_demuxer,
      NULL };
 diff --git a/third_party/ffmpeg/ffmpeg_generated.gni b/third_party/ffmpeg/ffmpeg_generated.gni
-index cd0840b..dfa83f4 100644
+index e281f4b6c3..dfa83f4ff1 100644
 --- a/third_party/ffmpeg/ffmpeg_generated.gni
 +++ b/third_party/ffmpeg/ffmpeg_generated.gni
-@@ -320,7 +320,17 @@ if (((current_cpu == "arm64" || current_cpu == "arm64e") &&
-     "libavcodec/hevc/pred.c",
+@@ -321,6 +321,16 @@ if (((current_cpu == "arm64" || current_cpu == "arm64e") &&
      "libavcodec/hevc/ps.c",
      "libavcodec/hevc/refs.c",
--    "libavcodec/hevc/sei.c"
-+    "libavcodec/hevc/sei.c",
+     "libavcodec/hevc/sei.c",
 +    "libavcodec/ac3dsp.c",
 +    "libavcodec/ac3tab.c",
 +    "libavcodec/ac3dec_float.c",
@@ -1246,23 +1341,19 @@ index cd0840b..dfa83f4 100644
    ]
  
    ffmpeg_c_sources += [
-@@ -366,7 +376,9 @@ if ((current_cpu == "x64" && ffmpeg_branding == "Chrome") ||
-   ffmpeg_c_sources += [
+@@ -367,6 +377,8 @@ if ((current_cpu == "x64" && ffmpeg_branding == "Chrome") ||
      "libavcodec/x86/bswapdsp_init.c",
      "libavcodec/x86/hevc/dsp_init.c",
--    "libavcodec/x86/h26x/h2656dsp.c"
-+    "libavcodec/x86/h26x/h2656dsp.c",
+     "libavcodec/x86/h26x/h2656dsp.c",
 +    "libavcodec/x86/ac3dsp_init.c",
 +    "libavcodec/x86/fmtconvert_init.c",
    ]
  
    ffmpeg_asm_sources += [
-@@ -378,7 +390,10 @@ if ((current_cpu == "x64" && ffmpeg_branding == "Chrome") ||
-     "libavcodec/x86/hevc/mc.asm",
+@@ -379,6 +391,9 @@ if ((current_cpu == "x64" && ffmpeg_branding == "Chrome") ||
      "libavcodec/x86/hevc/sao.asm",
      "libavcodec/x86/hevc/sao_10bit.asm",
--    "libavcodec/x86/h26x/h2656_inter.asm"
-+    "libavcodec/x86/h26x/h2656_inter.asm",
+     "libavcodec/x86/h26x/h2656_inter.asm",
 +    "libavcodec/x86/ac3dsp.asm",
 +    "libavcodec/x86/ac3dsp_downmix.asm",
 +    "libavcodec/x86/fmtconvert.asm",
