@@ -1,0 +1,143 @@
+Title: Let Chromium use ffmpeg's HEVC decoder
+Origin: Thorium (other/enable-hevc-ffmpeg-decoding.patch), ported
+
+The media/ half of 12-add-hevc-ffmpeg-decoder-parser.patch. Compiling the
+decoder into ffmpeg is not enough: Chromium asks the platform whether HEVC is
+supported, and routes HEVC to the platform decoder or to nothing. These four
+changes let the software decoder answer instead.
+
+  media/base/supported_types.cc
+                          IsDecoderHevcProfileSupported no longer consults
+                          PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT and the
+                          supplemental profile cache -- which is how a build
+                          with no hardware decoder ends up reporting no HEVC at
+                          all -- and answers yes whenever the ffmpeg video
+                          decoders are built, falling back to the old cache
+                          lookup when they are not. IsDecoderBuiltInVideoCodec
+                          also admits kHEVC alongside kH264, which is what makes
+                          it a "built-in" codec for the rest of media/.
+  media/ffmpeg/ffmpeg_common.cc
+                          GetAllowedVideoDecoders returns "h264,hevc". This list
+                          is checked against ffmpeg's own at runtime, so it has
+                          to match what patch 12 configured or the decoder stays
+                          unreachable.
+  media/filters/ffmpeg_video_decoder.cc
+                          IsCodecSupported accepts kHEVC, and kHEVC moves out of
+                          the NOTREACHED() arm of GetFFmpegVideoDecoderThreadCount
+                          into the H.264 arm, so HEVC gets the same
+                          pixels-based thread scaling rather than crashing on
+                          the first frame.
+
+Two deliberate differences from Thorium's version:
+
+The IsColorSpaceSupported check at the top of IsDecoderHevcProfileSupported is
+kept. Thorium removes it and returns a bare true. Every other codec decoded in
+software in this file gates on it -- VP9's copy carries the comment "Color
+management required for HDR to not look terrible" -- and HEVC is the codec most
+likely to show up as HDR. The check passes BT.2020 with PQ (SMPTEST2084) or HLG
+(ARIB_STD_B67), so nothing a real HDR stream uses is turned away; it rejects
+only color spaces Chromium cannot manage at all, where claiming support means
+decoding and then rendering it wrong.
+
+The copyright headers are left as upstream wrote them, here and in every other
+patch in this series.
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index 90e3bda..b4c9a88 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -229,25 +229,19 @@ bool IsAudioCodecProprietary(AudioCodec codec) {
+ #endif  // !BUILDFLAG(USE_PROPRIETARY_CODECS)
+ 
+ bool IsDecoderHevcProfileSupported(const VideoType& type) {
++  // Every other codec decoded in software here gates on the color space, and
++  // HEVC is the one most likely to arrive as HDR. BT.2020 with PQ or HLG passes
++  // this; only a color space Chromium cannot manage at all is rejected.
+   if (!IsColorSpaceSupported(type.color_space)) {
+     return false;
+   }
+ 
+-#if BUILDFLAG(ENABLE_PLATFORM_HEVC)
+-#if BUILDFLAG(PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT)
+-#if BUILDFLAG(IS_CHROMEOS)
+-  if (!base::FeatureList::IsEnabled(kPlatformHEVCDecoderSupport)) {
+-    return false;
+-  }
+-#endif  // BUILDFLAG(IS_CHROMEOS)
+-  return GetSupplementalDecoderVideoProfileCache()->IsProfileSupported(
+-      type.profile);
+-#else
++#if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+   return true;
+-#endif  // BUIDFLAG(PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT)
+ #else
+-  return false;
+-#endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
++  return GetSupplementalDecoderVideoProfileCache()->IsProfileSupported(
++      type.profile);
++#endif  // BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+ }
+ 
+ bool IsDecoderVp9ProfileSupported(const VideoType& type) {
+@@ -588,7 +582,7 @@ bool IsEncoderOptionalVideoType(const media::VideoType& type) {
+ 
+ bool IsDecoderBuiltInVideoCodec(VideoCodec codec) {
+ #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) && BUILDFLAG(USE_PROPRIETARY_CODECS)
+-  if (codec == VideoCodec::kH264) {
++  if (codec == VideoCodec::kH264 || codec == VideoCodec::kHEVC) {
+     return true;
+   }
+ #endif  // BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) &&
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index 280dce6..fe27fd5 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -69,7 +69,7 @@ VideoColorSpace GetGuessedColorSpace(const VideoColorSpace& color_space) {
+ const char* GetAllowedVideoDecoders() {
+   // This should match the configured lists in //third_party/ffmpeg.
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS) && BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+-  return "h264";
++  return "h264,hevc";
+ #else
+   return "";
+ #endif
+diff --git a/media/filters/ffmpeg_video_decoder.cc b/media/filters/ffmpeg_video_decoder.cc
+index 3e35153..39786da 100644
+--- a/media/filters/ffmpeg_video_decoder.cc
++++ b/media/filters/ffmpeg_video_decoder.cc
+@@ -71,19 +71,19 @@ static int GetFFmpegVideoDecoderThreadCount(const VideoDecoderConfig& config) {
+   // Only add more threads for those codecs that we know will benefit.
+   switch (config.codec()) {
+     case VideoCodec::kUnknown:
++      // We do not compile ffmpeg with support for any of these codecs.
++      NOTREACHED();
++
++    case VideoCodec::kH264:
++    case VideoCodec::kHEVC:
+     case VideoCodec::kVC1:
+     case VideoCodec::kMPEG2:
+-    case VideoCodec::kHEVC:
+     case VideoCodec::kVP9:
+     case VideoCodec::kAV1:
+     case VideoCodec::kDolbyVision:
+     case VideoCodec::kTheora:
+     case VideoCodec::kMPEG4:
+     case VideoCodec::kVP8:
+-      // We do not compile ffmpeg with support for any of these codecs.
+-      NOTREACHED();
+-
+-    case VideoCodec::kH264:
+       // Normalize to three threads for 1080p content, then scale linearly
+       // with number of pixels.
+       // Examples:
+@@ -117,8 +117,9 @@ static void ReleaseVideoBufferImpl(void* opaque, uint8_t* data) {
+ 
+ // static
+ bool FFmpegVideoDecoder::IsCodecSupported(VideoCodec codec) {
+-  // We only build support for H.264.
+-  return codec == VideoCodec::kH264 && IsDecoderBuiltInVideoCodec(codec);
++  // We only build support for H.264 / H.265.
++  return (codec == VideoCodec::kH264 || codec == VideoCodec::kHEVC) &&
++         IsDecoderBuiltInVideoCodec(codec);
+ }
+ 
+ FFmpegVideoDecoder::FFmpegVideoDecoder(std::unique_ptr<MediaLog> media_log)

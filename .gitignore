@@ -3,6 +3,7 @@
 .eslintcache
 .directory
 Thumbs.db
+__pycache__/
 
 # MSVS Stuff
 *.vcxproj.user

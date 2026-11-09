@@ -1,0 +1,93 @@
+Title: Let Chromium use ffmpeg's AC-3, E-AC-3 and MPEG-2 decoders
+Origin: Thorium (other/enable-mpeg2-ac3-eac3-decoding.patch), ported
+
+The media/ half of 13-add-ac3-eac3-ffmpeg-decoders.patch, plus MPEG-2 video,
+which Chromium also builds and then declines to admit to.
+
+  media/base/supported_types.cc
+                          IsDecoderDolbyAc3Eac3Supported answers yes when
+                          ffmpeg is built, ahead of the mojo/platform path that
+                          otherwise asks a hardware decoder. kMPEG2 moves out of
+                          the unconditional-false arm of
+                          IsDefaultDecoderSupportedVideoType and returns true.
+  media/ffmpeg/ffmpeg_common.cc
+                          AudioCodecToCodecID maps kAC3 and kEAC3 to their
+                          AVCodecIDs, without which the decoder is selected and
+                          then handed AV_CODEC_ID_NONE, and
+                          GetAllowedAudioDecoders gains ",ac3,eac3".
+  media/filters/ffmpeg_glue.cc
+                          the ac3 and eac3 demuxers, so a bare .ac3 or .eac3
+                          stream is openable and not only AC-3 inside MP4.
+
+The AC-3 paths stay behind ENABLE_PLATFORM_AC3_EAC3_AUDIO, as upstream has
+them, so this does not reach into builds that do not ask for those codecs.
+
+MPEG-2 rides along because Thorium ships it in the same patch and the decoder
+is already in the ffmpeg configs; it is the one codec here that nothing on the
+modern web needs, but local files and old streams still exist.
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index b4c9a88..0661efc 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -312,7 +312,9 @@ bool IsDecoderDolbyVisionProfileSupported(const VideoType& type) {
+ 
+ bool IsDecoderDolbyAc3Eac3Supported(const AudioType& type) {
+ #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+-#if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER) && \
++#if BUILDFLAG(ENABLE_FFMPEG)
++  return true;
++#elif BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER) && \
+     (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC))
+   return GetSupplementalDecoderAudioTypeCache()->IsProfileSupported(type);
+ #else
+@@ -463,9 +465,10 @@ bool IsDefaultDecoderSupportedVideoType(const VideoType& type) {
+       return IsDecoderHevcProfileSupported(type);
+     case VideoCodec::kDolbyVision:
+       return IsDecoderDolbyVisionProfileSupported(type);
++    case VideoCodec::kMPEG2:
++      return true;
+     case VideoCodec::kUnknown:
+     case VideoCodec::kVC1:
+-    case VideoCodec::kMPEG2:
+     case VideoCodec::kMPEG4:
+       return false;
+   }
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index fe27fd5..4e17b3b 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -185,6 +185,12 @@ AVCodecID AudioCodecToCodecID(AudioCodec audio_codec,
+   switch (audio_codec) {
+     case AudioCodec::kAAC:
+       return AV_CODEC_ID_AAC;
++#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
++    case AudioCodec::kAC3:
++      return AV_CODEC_ID_AC3;
++    case AudioCodec::kEAC3:
++      return AV_CODEC_ID_EAC3;
++#endif
+     case AudioCodec::kALAC:
+       return AV_CODEC_ID_ALAC;
+     case AudioCodec::kMP3:
+@@ -1119,7 +1125,7 @@ int32_t HashCodecName(const char* codec_name) {
+ 
+ const char* GetAllowedAudioDecoders() {
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+-#define EXTRA_CODECS ",aac"
++#define EXTRA_CODECS ",aac,ac3,eac3"
+ #else
+ #define EXTRA_CODECS
+ #endif
+diff --git a/media/filters/ffmpeg_glue.cc b/media/filters/ffmpeg_glue.cc
+index 6ecbf5d..78203a2 100644
+--- a/media/filters/ffmpeg_glue.cc
++++ b/media/filters/ffmpeg_glue.cc
+@@ -89,6 +89,8 @@ static const char* GetAllowedDemuxers() {
+                                                  "flac", "mp3",      "mov"};
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+     allowed_demuxers.push_back("aac");
++    allowed_demuxers.push_back("ac3");
++    allowed_demuxers.push_back("eac3");
+ #endif
+     return base::JoinString(allowed_demuxers, ",");
+   }());
