@@ -1,7 +1,7 @@
 Modifys the default_app asar with custom branding
 
 diff --git a/electron/default_app/default_app.ts b/electron/default_app/default_app.ts
-index 443c9c2f00..b6b1f57fea 100644
+index 443c9c2f00..ee97213ef9 100644
 --- a/electron/default_app/default_app.ts
 +++ b/electron/default_app/default_app.ts
 @@ -27,13 +27,13 @@ app.whenReady().then(() => {
@@ -20,6 +20,15 @@ index 443c9c2f00..b6b1f57fea 100644
          }
        }
      ]
+@@ -82,7 +82,7 @@ async function createWindow(backgroundColor?: string) {
+   const options: Electron.BrowserWindowConstructorOptions = {
+     width: 960,
+     height: 620,
+-    autoHideMenuBar: true,
++    autoHideMenuBar: false,
+     backgroundColor,
+     webPreferences: {
+       preload: url.fileURLToPath(new URL('preload.js', import.meta.url)),
 diff --git a/electron/default_app/index.html b/electron/default_app/index.html
 index 5ac92e4fb8..ef97def3ac 100644
 --- a/electron/default_app/index.html
