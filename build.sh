@@ -1275,10 +1275,22 @@ package() {
   [ "$ARCH" = x86 ] && execute "" "Unable to copy electron.lib" cp "$out/electron.lib" "$headers/node.lib"
 
   # Checksums cover every arch packaged so far, like the official SHASUMS256.txt.
+  #
+  # The two manifests deliberately differ in format, because two different
+  # parsers read them and upstream's own files differ the same way:
+  #
+  #   dist/    -b, so names carry the binary-mode "*" marker. sumchecker, which
+  #            @electron/get hands this to, expects that.
+  #   headers/ no -b. node-gyp parses this one itself (downloadShasums() in
+  #            lib/install.js) and only strips a leading "./", not the "*". With
+  #            -b every key comes out as "*node-v<ver>-headers.tar.gz" while it
+  #            looks up "node-v<ver>-headers.tar.gz", gets undefined, and every
+  #            native module build dies with
+  #              local checksum <sha> not match remote undefined
   cd "$dest" && execute "Writing checksums" "Unable to write SHASUMS256.txt" \
       bash -c 'sha256sum -b -- *.zip *.json *.d.ts > SHASUMS256.txt.tmp && mv SHASUMS256.txt.tmp SHASUMS256.txt'
   cd "$headers" && execute "" "Unable to write headers SHASUMS256.txt" \
-      bash -c 'find . -type f ! -name "SHASUMS*" | sed "s|^\./||" | sort | xargs sha256sum -b -- > SHASUMS256.txt.tmp && mv SHASUMS256.txt.tmp SHASUMS256.txt'
+      bash -c 'find . -type f ! -name "SHASUMS*" | sed "s|^\./||" | sort | xargs sha256sum -- > SHASUMS256.txt.tmp && mv SHASUMS256.txt.tmp SHASUMS256.txt'
 
   log "${GRE} Packaged into %s and %s${c0}\n" "$dest" "$headers"
 }

@@ -2,7 +2,7 @@
 
 A drop-in replacement for the [`electron`](https://www.npmjs.com/package/electron)
 npm package that installs [electron-legacy](https://github.com/Alex313031/electron-legacy)
-builds — up-to-date Electron that still runs on Windows 7, 8 and 8.1.
+builds — up-to-date Electron that still runs on Windows 7, 8, and 8.1.
 
 The package is named `electron`, so `require('electron')`, the `electron` binary
 and anything that resolves the `electron` package keep working unchanged.
@@ -14,7 +14,7 @@ In your `package.json`:
 ```json
 {
   "devDependencies": {
-    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.2.0"
+    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.10.2"
   }
 }
 ```
