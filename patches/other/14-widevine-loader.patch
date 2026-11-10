@@ -73,6 +73,26 @@ support reads that, which this CDM does not advertise -- so Electron calls
 
 //components/cdm/common and //components/cdm/renderer both restrict visibility
 to the embedders Chromium ships, so //electron/* is added to those two lists.
+electron/chromium_src already DEPed //components/cdm/renderer under
+enable_widevine, so that dep could never have resolved before this.
+
+The same stale block in electron/chromium_src/BUILD.gn is removed. It compiled
+four chrome/renderer/media sources, two of which -- chrome_key_systems_provider
+.cc and .h -- no longer exist: the ChromeKeySystemsProvider class they held was
+replaced by the KeySystemSupportRegistration mechanism this patch uses, so with
+enable_widevine on, gn produced a target for a file that is not there:
+
+  ninja: error: '../../chrome/renderer/media/chrome_key_systems_provider.cc',
+  needed by 'obj/electron/chromium_src/chrome/chrome_key_systems_provider.obj',
+  missing and no known rule to make it
+
+Deleting just those two lines would swap that for a link error. The surviving
+chrome_key_systems.cc includes chrome/renderer/process_state.h for its one
+incognito check, and process_state is not in chromium_src, so
+process_state::IsIncognitoProcess() would go undefined. Nothing in Electron
+calls GetChromeKeySystems() either -- its only caller is
+chrome_content_renderer_client.cc, which Electron does not build -- so the
+whole block goes, and the dep moves to electron_lib where the call actually is.
 
 diff --git a/components/cdm/common/BUILD.gn b/components/cdm/common/BUILD.gn
 --- a/components/cdm/common/BUILD.gn
@@ -132,6 +152,26 @@ diff --git a/electron/BUILD.gn b/electron/BUILD.gn
    public_deps = [
      "//base",
      "//base:i18n",
+diff --git a/electron/chromium_src/BUILD.gn b/electron/chromium_src/BUILD.gn
+--- a/electron/chromium_src/BUILD.gn
++++ b/electron/chromium_src/BUILD.gn
+@@ -293,16 +293,6 @@
+     deps += [ ":system_media_capture_permissions_mac_conflict" ]
+   }
+ 
+-  if (enable_widevine) {
+-    sources += [
+-      "//chrome/renderer/media/chrome_key_systems.cc",
+-      "//chrome/renderer/media/chrome_key_systems.h",
+-      "//chrome/renderer/media/chrome_key_systems_provider.cc",
+-      "//chrome/renderer/media/chrome_key_systems_provider.h",
+-    ]
+-    deps += [ "//components/cdm/renderer" ]
+-  }
+-
+   if (enable_printing) {
+     sources += [
+       "//chrome/browser/bad_message.cc",
 diff --git a/electron/shell/app/electron_content_client.cc b/electron/shell/app/electron_content_client.cc
 --- a/electron/shell/app/electron_content_client.cc
 +++ b/electron/shell/app/electron_content_client.cc
