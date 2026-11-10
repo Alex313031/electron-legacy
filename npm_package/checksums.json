@@ -1,8 +1,12 @@
 {
-  "chromedriver-v44.2.0-win32-x64.zip": "3b6535c05429817fa2716c8db3bd61c6c6cab09f729b2cf123c1da05ba4a97b5",
-  "electron-v44.2.0-win32-x64.zip": "4cc261c8e45f1cde288f42b9552f0d4b92c023f10c7e50dc415c683b7316c084",
-  "ffmpeg-v44.2.0-win32-x64.zip": "939239f52131baf3efc243ffe6b2bd70cdd6954c40965536f13b933ab4ff4270",
-  "mksnapshot-v44.2.0-win32-x64.zip": "08e2a78d53e57e4bd681319d45c14500d82cf29fff8e7acaed99df201a2d3df4",
-  "electron-api.json": "c31453550dade9864d897624b282ac6babaad45b1ccb768223ef3fd858e8870f",
-  "electron.d.ts": "896da52cac173bb72099644c9b4c63c0f032d7c482615ee5c8fce58cd5f4bde7"
+  "chromedriver-v44.10.2-win32-ia32.zip": "239dfa70a700d9dfbd68f7caa3a56d40ad20753a6b5e3ee06876ba0bdbe74d98",
+  "chromedriver-v44.10.2-win32-x64.zip": "e90e0d49397cd74813d3c9232e12a5467a64df2efcc3d45b647dbcb9ae59f92b",
+  "electron-v44.10.2-win32-ia32.zip": "ec2fd85846b0642c60f29c93a70b68da1ee3ff2e04cdc3e2caf012d42cfcddbc",
+  "electron-v44.10.2-win32-x64.zip": "afabfca8e377378cd850e53f04c20c2074a531041b231b60bbb9d6dc2464d08c",
+  "ffmpeg-v44.10.2-win32-ia32.zip": "6fa94d9536a2e7c516f6ed066bc1f150efda648db9e438000c631f37f3127d5e",
+  "ffmpeg-v44.10.2-win32-x64.zip": "e606b438465f3710995e6cb16f478687bd1ffa850c120b4e1c309286fd221489",
+  "mksnapshot-v44.10.2-win32-ia32.zip": "bfe7cd12d35a6bd48e6418e0126de8a9bf413180837e2199b86ccd4562962205",
+  "mksnapshot-v44.10.2-win32-x64.zip": "a9bee171bcc98f6943c0a368559b6f0791485ff3a14cbcdc99caae7633bd908f",
+  "electron-api.json": "36ef9a002a69060fc0f14172e3a45c0b5522d674d51b1d1a4f69c02973c6962a",
+  "electron.d.ts": "ccc638a715230f8be9d24bb54d5cadfdbf33eef2e436fb8df83fb8a28c76e0b7"
 }

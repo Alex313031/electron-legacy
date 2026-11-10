@@ -1,6 +1,6 @@
 {
   "name": "electron",
-  "version": "44.2.0",
+  "version": "44.10.2",
   "description": "Electron for legacy Windows (7/8/8.1)",
   "repository": "https://github.com/Alex313031/electron-legacy",
   "license": "MIT",
