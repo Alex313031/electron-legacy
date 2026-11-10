@@ -9,6 +9,7 @@
   body { font: 16px/1.6 system-ui, -apple-system, Segoe UI, sans-serif;
          max-width: 46rem; margin: 3rem auto; padding: 0 1.25rem; }
   h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
   .sub { opacity: .7; margin-top: 0; }
   code, pre { font-family: ui-monospace, Consolas, monospace; font-size: .9em; }
   pre { background: rgba(127,127,127,.12); padding: .8rem 1rem; border-radius: 6px;
@@ -16,6 +17,8 @@
   table { border-collapse: collapse; margin: 1rem 0; }
   td, th { text-align: left; padding: .3rem 1.2rem .3rem 0; }
   th { border-bottom: 1px solid rgba(127,127,127,.4); }
+  .note { border-left: 3px solid rgba(127,127,127,.4); padding-left: 1rem;
+          opacity: .85; }
   footer { margin-top: 2.5rem; opacity: .7; font-size: .9em; }
 </style>
 </head>
@@ -31,29 +34,32 @@ paths like <code>win-x64/node.lib</code> underneath the dist URL. That is what
 this site is for, and the only reason it exists.</p>
 
 <h2>Usage</h2>
-<pre>npm config set disturl https://alex313031.github.io/electron-legacy/headers</pre>
+<pre>npm config set disturl https://thorium.rocks/electron-legacy/headers</pre>
 <p>or per-invocation:</p>
-<pre>npm_config_disturl=https://alex313031.github.io/electron-legacy/headers \
+<pre>npm_config_disturl=https://thorium.rocks/electron-legacy/headers \
   npm rebuild --runtime=electron --target=44.10.2 --arch=x64</pre>
 
-<h2>What node-gyp fetches</h2>
+<h2>v44.10.2</h2>
 <table>
-<tr><th>Path</th><th>Purpose</th></tr>
-<tr><td><code>v&lt;version&gt;/node-v&lt;version&gt;-headers.tar.gz</code></td><td>headers</td></tr>
-<tr><td><code>v&lt;version&gt;/SHASUMS256.txt</code></td><td>verifies the above</td></tr>
-<tr><td><code>v&lt;version&gt;/win-x64/node.lib</code></td><td>64-bit import library</td></tr>
-<tr><td><code>v&lt;version&gt;/win-x86/node.lib</code></td><td>32-bit import library</td></tr>
+<tr><th>File</th><th>Purpose</th></tr>
+<tr><td><a href="headers/v44.10.2/node-v44.10.2-headers.tar.gz">node-v44.10.2-headers.tar.gz</a></td><td>headers</td></tr>
+<tr><td><a href="headers/v44.10.2/SHASUMS256.txt">SHASUMS256.txt</a></td><td>verifies the others</td></tr>
+<tr><td><a href="headers/v44.10.2/win-x64/node.lib">win-x64/node.lib</a></td><td>64-bit import library</td></tr>
+<tr><td><a href="headers/v44.10.2/win-x86/node.lib">win-x86/node.lib</a></td><td>32-bit import library</td></tr>
 </table>
 
-<p>Only those four per version. The <code>iojs-*</code> aliases and the legacy
-<code>x64/</code> and root <code>node.lib</code> locations that upstream still
-publishes are deliberately absent: node-gyp only ever requests them for targets
-whose major version is 1&ndash;3, which this fork will never be.</p>
+<p class="note">Those four per version, linked individually because directory
+URLs such as <code>headers/v44.10.2/</code> return 404 &mdash; this site ships
+<code>.nojekyll</code> and GitHub Pages generates no directory listings.
+node-gyp only ever requests files, so that costs nothing.</p>
 
-<h2>Available versions</h2>
-<ul>
-<li><a href="headers/v44.10.2/">v44.10.2</a></li>
-</ul>
+<p>The <code>iojs-*</code> aliases and the legacy <code>x64/</code> and root
+<code>node.lib</code> locations that upstream still publishes are deliberately
+absent. node-gyp only names those for targets whose major version is
+1&ndash;3 (<code>isNamedForLegacyIojs</code> in <code>process-release.js</code>),
+which this fork will never be &mdash; they were an Electron&nbsp;3-era
+compatibility hack. Dropping them takes each version from 9.0&nbsp;MB to
+2.9&nbsp;MB.</p>
 
 <footer>
 <a href="https://github.com/Alex313031/electron-legacy">Alex313031/electron-legacy</a>

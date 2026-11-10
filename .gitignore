@@ -1,2 +1,13 @@
+# Not cruft -- do not "clean this up".
+#
+# This is an orphan branch holding only the Pages tree, so everything from the
+# source branches (checkout/, tools/) appears as untracked when you switch to
+# it. Without these entries, a `git clean -fd` while on gh-pages deletes the
+# entire Chromium checkout.
+#
+# Caveat: this only stops `git clean -fd`. The -x flag deliberately ignores
+# these rules, so `git clean -fdx` still removes checkout/. The only real
+# protection is keeping the checkout outside the repo, which build.sh supports:
+#   ROOT_PATH=/home/alex/electron-legacy-checkout ./build.sh x64
 checkout/
 tools/
