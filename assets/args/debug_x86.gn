@@ -84,3 +84,6 @@ treat_warnings_as_errors = true
 #
 # No v8_builtins_profiling_log_file either -- PGO data optimizes the build it
 # was collected for, which is not this one.
+
+# No PGO optimizations for debug builds
+chrome_pgo_phase = 0

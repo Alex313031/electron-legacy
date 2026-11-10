@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.1"
+SCRIPTVER="1.3.2"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -1164,10 +1164,22 @@ build_ffmpeg() {
   # publishes a codec-free ffmpeg.dll that consumers can drop in place of ours
   # when they can't ship those codecs, so build that too -- it needs its own
   # out dir because it inverts those two args (see electron/build/args/ffmpeg.gn).
-  local ffout
+  local ffout args=()
   ffout=$(ffmpeg_out_dir)
-  write_args "$ffout" 'import("//electron/build/args/ffmpeg.gn")' \
-      'target_os = "win"' "target_cpu = \"$ARCH\"" "$(version_arg)"
+  args=('import("//electron/build/args/ffmpeg.gn")' 'target_os = "win"'
+        "target_cpu = \"$ARCH\"" "$(version_arg)")
+  # ffmpeg.gn is an official build, so Clang PGO is on, and Electron resolves
+  # the profile through a state file it publishes only for the platforms it
+  # ships. There is no win-x86.pgo.txt, so gn gen dies reading it:
+  #   ERROR at //build/config/compiler/pgo/BUILD.gn: Could not read file.
+  #   I resolved this to ".../electron/build/pgo_profiles/win-x86.pgo.txt"
+  # assets/args/release_x86.gn carries chrome_pgo_phase = 0 for exactly this,
+  # but the ffmpeg out dir builds from ffmpeg.gn and never saw it. Keyed off
+  # the state file rather than the arch, so x64 keeps its PGO and a win-x86
+  # profile appearing later needs no change here.
+  [ -f "$ELECTRON_PATH/build/pgo_profiles/win-$ARCH.pgo.txt" ] \
+      || args+=('chrome_pgo_phase = 0')
+  write_args "$ffout" "${args[@]}"
   autoninja -C "$ffout" electron:electron_ffmpeg_zip
 }
 
