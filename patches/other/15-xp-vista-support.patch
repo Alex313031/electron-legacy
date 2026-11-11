@@ -1,0 +1,959 @@
+Title: Add third_party/winwrap, a Win32 compatibility layer for XP
+Origin: electron-legacy (this repo)
+
+Groundwork for Windows XP. Scanning the shipped x64 electron.exe against real
+system DLLs gives the size of the problem: 2 symbols missing on Vista SP2, but
+28 on XP x64 and 38 on XP SP3 x86 (tools/check_win_imports.py reproduces this).
+A statically imported symbol the target OS does not export is fatal at load,
+before any process code runs, so none of it can be fixed at a call site.
+
+Vista's two are the TryAcquireSRWLock variants, which nothing in Node or
+Electron calls; patches/node/06-node-xp-vista-support.patch handles those by teaching libuv they can be
+absent. XP is a different problem. Its list is the synchronisation primitives
+themselves -- the whole SRWLOCK family, condition variables, InitOnceExecuteOnce
+-- which are used pervasively and have no "skip it" answer. 38 call-site patches
+is not a plan, so this is a component instead.
+
+How calls are captured, with no change at any call site: a
+__declspec(dllimport) call does not call the function, it loads a pointer from
+__imp_<name> and calls through that. Defining __imp_<name> ourselves is enough.
+The linker resolves the reference here and never extracts kernel32.lib's member
+for it -- no duplicate symbol, because archive members are only pulled to
+satisfy still-undefined references. And kernel32.lib is never named in GN: it
+arrives through /DEFAULTLIB directives the SDK headers embed in every object,
+and those are processed after command-line libraries, so an explicitly linked
+winwrap wins without reordering anything.
+
+The symbol is decorated per architecture -- __imp_GetTickCount64 on x64,
+__imp__GetTickCount64@0 on x86 -- and the x86 form is not a legal C identifier,
+so redirects.cc attaches it with an asm label and keeps the stdcall byte count
+beside each name.
+
+Two link modes, is_component_winwrap in third_party/winwrap/winwrap.gni:
+static winwrap.lib (default) or shared winwrap.dll. Static is the default
+because it ships nothing extra, so there is no separate binary anyone has to
+trust -- which is the point of having our own rather than consuming a prebuilt
+wrapper DLL we cannot audit. use_winwrap gates it entirely, and defaults off:
+the redirects capture every call in the binary, so an ordinary build would get
+a CRITICAL_SECTION where it asked for an SRWLOCK, for nothing.
+
+Verified against the packaged toolchain and the real system DLLs, both
+architectures: every translation unit compiles against the 10.0.26100.0 SDK;
+redirects.cc emits exactly the nine expected symbols with correct x86 byte
+counts (@0, @4, @16); a consumer calling all nine through the SDK headers,
+linked against the real kernel32.Lib, comes out with none of them in its import
+table; and that binary scans clean against XP SP3 x86 and XP x64 exports --
+winwrap's own imports are all XP-era primitives. The shared mode links on both
+architectures too, exporting all ten names with a correctly decorated import
+library (__imp__GetTickCount64@0 and friends on x86).
+
+winwrap_internal_config drops _WIN32_WINNT to 0x0501 for winwrap's own sources,
+via cflags with a -U first because Chromium sets it globally. That is load
+bearing rather than cosmetic: it hides the post-XP declarations from this
+library while leaving consumers at 0x0A00, so a Vista-or-later call added here
+fails to compile instead of becoming a runtime surprise on XP. winwrap still
+builds because it needs only the types, which live ungated in winnt.h, and
+never calls the functions it stands in for.
+
+winwrap.rc is UTF-16LE with a BOM, and carried in this patch as a GIT binary
+hunk for that reason. rc.py passes /utf-8 to the resource compiler only when
+the .rc itself starts with a UTF-16LE BOM; without it the compiler rejects any
+character above 7-bit ASCII, which the \251 in LEGAL_COPYRIGHT is. Re-saving
+that file as UTF-8 breaks the resource build.
+
+Linked in through //build/config:common_deps, which BUILD.gn calls out as a
+dependency of every executable and shared library. That is the right altitude
+for this: the redirect works by satisfying the __imp_<name> slot a call site
+loads through, and every final link resolves those independently, so putting it
+on one target would leave the others importing kernel32. common_deps is the one
+place that covers executables, shared libraries and loadable modules together.
+The shared build of winwrap sets no_default_deps to avoid depending on itself
+through that same group, and the dep is guarded on is_win as well as
+use_winwrap: is_win follows current_os, not target_os, so without it a cross
+build from Linux would hand winwrap to the host tools built through the same
+group.
+
+Scope, stated plainly: this lands the mechanism and three implementations
+(SRWLOCK on CRITICAL_SECTION, GetTickCount64, InitOnceExecuteOnce). The other
+~29 XP symbols are not written yet, condition variables being the notable gap.
+Condition variables need a lazily allocated wait queue behind a single pointer,
+the same shape srwlock.cc uses for its CRITICAL_SECTION. With use_winwrap off
+-- the default -- none of this is reached, so the patch is inert by
+construction.
+
+One thing this cannot do, recorded in redirects.cc so it is not rediscovered
+the hard way: the SRWLOCK redirects must not be used on Vista. Vista exports
+the family except the two Try variants, and redirecting only those would point
+a CRITICAL_SECTION-based Try at a lock whose Ptr field the real implementation
+owns. The family is all ours or all the system's.
+
+diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
+--- a/build/config/BUILD.gn
++++ b/build/config/BUILD.gn
+@@ -19,6 +19,7 @@ import("//build/config/pch.gni")
+ import("//build/config/rust.gni")
+ import("//build/config/sanitizers/sanitizers.gni")
+ import("//build/config/ui.gni")
++import("//third_party/winwrap/winwrap.gni")
+ if (is_android) {
+   import("//build/config/android/abi.gni")
+ }
+@@ -164,6 +165,7 @@ config("default_libs") {
+       "odbc32.lib",
+       "odbccp32.lib",
+       "oleaut32.lib",
++      "psapi.lib",
+       "shell32.lib",
+       "shlwapi.lib",
+       "user32.lib",
+@@ -292,6 +294,22 @@ group("common_deps") {
+     # crbug.com/402171653 for context.
+     public_deps += [ "//third_party/compiler-rt:atomic" ]
+   }
++
++  # Win32 functions the oldest supported Windows does not export. This has to
++  # reach every executable and shared library: the redirect works by satisfying
++  # the __imp_<name> slot a dllimport call site loads through, and every final
++  # link resolves those independently. common_deps is the single place covering
++  # all three link kinds, which is why it goes here and not on any one target.
++  #
++  # Inert unless use_winwrap is set -- winwrap_lib is an empty group then.
++  #
++  # is_win is current_os == "win", not target_os, so this is also what keeps
++  # host-toolchain targets out of it. A cross build from Linux compiles host
++  # tools (mksnapshot, protoc) through this same group, and they must not pull
++  # a library of Win32 implementations.
++  if (use_winwrap && is_win) {
++    public_deps += [ "//third_party/winwrap:winwrap_lib" ]
++  }
+ }
+ 
+ # Only the executable template in BUILDCONFIG.gn should reference this.
+diff --git a/third_party/winwrap/BUILD.gn b/third_party/winwrap/BUILD.gn
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/BUILD.gn
+@@ -0,0 +1,90 @@
++# Copyright 2026 Alex313031. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//third_party/winwrap/winwrap.gni")
++
++assert(is_win || target_os == "win", "winwrap only has a reason to exist on Windows")
++
++# The implementations. Shared by both link modes; what differs is how calls are
++# steered into them (see redirects.cc for the static mode, winwrap.def for the
++# shared one).
++_winwrap_sources = [
++  "init_once.cc",
++  "srwlock.cc",
++  "tick_count.cc",
++  "winwrap.h",
++  "winwrap_version.h",
++]
++
++config("winwrap_public_config") {
++  include_dirs = [ "." ]
++}
++
++# winwrap has to run on the oldest target itself, so it gets none of the
++# toolchain's newer-Windows assumptions and may not be instrumented with
++# anything that pulls in a post-XP import of its own.
++config("winwrap_internal_config") {
++  cflags = [
++    "-U_WIN32_WINNT", # Must undef first to avoid redefinition errors.
++    "-D_WIN32_WINNT=0x0501" # XP, for winwrap's own sources only.
++  ]
++  configs = []
++}
++
++shared_library("winwrap_shared") {
++  defines = [ "WINWRAP_DLL" ]
++  output_name = "winwrap"
++  # dll.cc contains functions only a DLL would want.
++  sources = _winwrap_sources + [ "dll.cc", "winwrap.rc" ]
++
++  # //build/config:common_deps depends on winwrap_lib, and every
++  # shared_library picks common_deps up by default -- which would make
++  # winwrap depend on itself. Opting out breaks that cycle. The static form
++  # does not need this, because static_library targets never get
++  # common_deps in the first place.
++  no_default_deps = true
++
++  # Exports the public Win32 names, aliased onto the winwrap_ implementations,
++  # so the generated import library satisfies __imp_<name> and the linker
++  # binds to winwrap.dll instead of kernel32.
++  inputs = [ "winwrap.def" ]
++  ldflags = [ "/DEF:" + rebase_path("winwrap.def", root_build_dir) ]
++
++  configs += [ ":winwrap_internal_config" ]
++  public_configs = [ ":winwrap_public_config" ]
++}
++
++static_library("winwrap_static") {
++  output_name = "winwrap"
++
++  # redirects.cc is what makes the static mode work: it defines the
++  # __imp_<name> slots that dllimport call sites load through, so the linker
++  # resolves them here and never extracts kernel32.lib's member for them.
++  sources = _winwrap_sources + [ "redirects.cc" ]
++
++  configs += [ ":winwrap_internal_config" ]
++  public_configs = [ ":winwrap_public_config" ]
++}
++
++# Depend on this rather than on ":winwrap" directly, so a build with
++# use_winwrap = false links nothing at all and the dependency can stay
++# unconditional at the call site.
++group("winwrap_lib") {
++  if (use_winwrap) {
++    if (is_component_winwrap) {
++      public_deps = [ ":winwrap_shared" ]
++    } else {
++      public_deps = [ ":winwrap_static" ]
++    }
++  }
++}
++
++group("winwrap_all") {
++  testonly = true
++  # Build both static and shared versions of the lib
++  deps = [
++    ":winwrap_static",
++    ":winwrap_shared"
++  ]
++}
+diff --git a/third_party/winwrap/LICENSE b/third_party/winwrap/LICENSE
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/LICENSE
+@@ -0,0 +1,29 @@
++BSD 3-Clause License
++
++Copyright (c) 2026-2026, Alexander Frick <alex313031>  
++All rights reserved.
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are met:
++
++1. Redistributions of source code must retain the above copyright notice, this
++   list of conditions and the following disclaimer.
++
++2. Redistributions in binary form must reproduce the above copyright notice,
++   this list of conditions and the following disclaimer in the documentation
++   and/or other materials provided with the distribution.
++
++3. Neither the name of the copyright holder nor the names of its
++   contributors may be used to endorse or promote products derived from
++   this software without specific prior written permission.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+diff --git a/third_party/winwrap/README.chromium b/third_party/winwrap/README.chromium
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/README.chromium
+@@ -0,0 +1,27 @@
++Name: winwrap
++Short Name: winwrap
++URL: https://github.com/Alex313031/electron-legacy
++Version: N/A
++Revision: N/A
++License: BSD-3-Clause
++License File: LICENSE
++Security Critical: yes
++Shipped: yes
++
++Description:
++Implementations of Win32 functions that older Windows releases do not export,
++so a binary compiled against a current SDK still loads on them. A statically
++imported symbol the target OS does not export is fatal at load, before any
++process code runs, so this cannot be solved at the call site.
++
++Calls are captured without touching call sites: a __declspec(dllimport) call
++loads a pointer from __imp_<name>, so defining that symbol here is enough. The
++linker resolves it from winwrap and never extracts kernel32.lib's member for
++it. kernel32.lib reaches the link through /DEFAULTLIB directives embedded in
++object files by the SDK headers, and those are processed after libraries given
++on the command line, so an explicitly linked winwrap wins.
++
++Local Modifications:
++Written for this project; "third party" only in the sense of living outside the
++Chromium and Electron trees, so it can be split into its own repository and
++consumed as a DEP later without moving anything.
+diff --git a/third_party/winwrap/dll.cc b/third_party/winwrap/dll.cc
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/dll.cc
+@@ -0,0 +1,88 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// winwrap.dll functions
++
++#include <shlwapi.h>
++
++#include "winwrap.h"
++
++extern "C" {
++
++[[maybe_unused]] static bool was_static_load = false;
++
++// Main entry point when loading/unloading .DLL from address space of another process/thread.
++// MUST have exact function signature BOOL WINAPI, and C linkage: the CRT's
++// DllMainCRTStartup looks for the unmangled name, and would silently fall back
++// to its own do-nothing DllMain if this one were mangled. Not an export: the loader
++// reaches it through the entry point, not the export table.
++// See https://www.transmissionzero.co.uk/computing/advanced-mingw-dll-topics/
++BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD dwReason, LPVOID lpvReserved) {
++  switch (dwReason) {
++    // Called on LoadLibrary or static import
++    case DLL_PROCESS_ATTACH: {
++      // Non-NULL means dll was statically loaded.
++      if (lpvReserved != nullptr) {
++        was_static_load = true;
++      }
++      return TRUE;
++    }
++    // Called when threads are run by parent process after DLL_PROCESS_ATTACH
++    // (kept for completeness)
++    case DLL_THREAD_ATTACH: {
++      return TRUE;
++    }
++    // Called when FreeLibrary is called or program shutting down
++    case DLL_PROCESS_DETACH: {
++      // If lpvReserved is NULL, DLL load failed or FreeLibrary was called.
++      if (lpvReserved == nullptr) {
++        return TRUE;
++      } else {
++        // Process is terminating
++        return TRUE;
++      }
++    }
++    case DLL_THREAD_DETACH: {
++      return TRUE; // Unused in winwrap.dll
++    }
++    default:
++      // Should never reach here.
++      return FALSE;
++  }
++}
++
++// The shell's standard version query (what shlwapi's DllGetVersion protocol
++// expects): STDAPI shape, i.e. C linkage + stdcall, exported undecorated via
++// the .def. Fills whichever of DLLVERSIONINFO / DLLVERSIONINFO2 the caller
++// sized. No exceptions cross this boundary - a bad size is a return code.
++HRESULT CALLBACK DllGetVersion(DLLVERSIONINFO* pdvi) {
++  if (pdvi == nullptr) {
++    return E_POINTER;
++  }
++
++  switch (pdvi->cbSize) {
++    case sizeof(DLLVERSIONINFO2): {
++      // Caller passed DLLVERSIONINFO2 - fill extended fields
++      DLLVERSIONINFO2* pdvi2 = reinterpret_cast<DLLVERSIONINFO2*>(pdvi);
++      pdvi2->dwFlags         = 0;
++      pdvi2->ullVersion      =
++          MAKEDLLVERULL(WINWRAP_MAJOR_VERSION, WINWRAP_MINOR_VERSION, WINWRAP_BUILD_VERSION, 0);
++    }
++      [[fallthrough]]; // no break, fall through for backward compatibility DLLVERSIONINFO
++    case sizeof(DLLVERSIONINFO): {
++      // Fill base DLLVERSIONINFO fields
++      pdvi->dwMajorVersion = WINWRAP_MAJOR_VERSION;
++      pdvi->dwMinorVersion = WINWRAP_MINOR_VERSION;
++      pdvi->dwBuildNumber  = WINWRAP_BUILD_VERSION;
++      pdvi->dwPlatformID   = DLLVER_PLATFORM_NT;
++      return S_OK;
++    }
++    default:
++      break;
++  }
++  // cbSize is neither structure's - unsupported
++  return E_INVALIDARG;
++}
++
++}  // extern "C"
+diff --git a/third_party/winwrap/init_once.cc b/third_party/winwrap/init_once.cc
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/init_once.cc
+@@ -0,0 +1,98 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// InitOnceExecuteOnce on top of interlocked operations.
++//
++// INIT_ONCE is one pointer wide (RTL_RUN_ONCE is `struct { PVOID Ptr; }`), and
++// INIT_ONCE_STATIC_INIT leaves it zero, so Ptr doubles as the state word:
++//
++//   0  not started
++//   1  a thread is running the callback
++//   2  done, callback succeeded
++//
++// A losing thread spins with SwitchToThread rather than blocking on an event.
++// That is cruder than the real implementation, which parks waiters, but
++// callbacks behind InitOnce are short by construction and this keeps the shim
++// free of any allocation -- which matters because libuv's uv_once() sits
++// directly on this, and uv_once runs during libuv startup before much else is
++// usable.
++//
++// Limitation worth knowing: the context value is not preserved. Real
++// InitOnceExecuteOnce packs a pointer-aligned context into the same word and
++// hands it back to later callers. Here, callers after the first get nullptr.
++// libuv passes no context, which is the caller this exists for; anything that
++// does need the context should not use this shim without extending it to the
++// tagged-pointer scheme.
++
++#include "winwrap.h"
++
++namespace {
++
++enum : ULONG_PTR {
++  kUninitialised = 0,
++  kRunning = 1,
++  kDone = 2,
++};
++
++inline PVOID AsPtr(ULONG_PTR value) {
++  return reinterpret_cast<PVOID>(value);
++}
++
++inline ULONG_PTR Load(PVOID volatile* slot) {
++  return reinterpret_cast<ULONG_PTR>(::InterlockedCompareExchangePointer(
++      const_cast<PVOID*>(slot), nullptr, nullptr));
++}
++
++}  // namespace
++
++extern "C" BOOL WINAPI winwrap_InitOnceExecuteOnce(PINIT_ONCE InitOnce,
++                                                   PINIT_ONCE_FN InitFn,
++                                                   PVOID Parameter,
++                                                   LPVOID* Context) {
++  if (!InitOnce || !InitFn) {
++    ::SetLastError(ERROR_INVALID_PARAMETER);
++    return FALSE;
++  }
++
++  PVOID volatile* slot = reinterpret_cast<PVOID volatile*>(&InitOnce->Ptr);
++
++  for (;;) {
++    switch (Load(slot)) {
++      case kDone:
++        if (Context) {
++          *Context = nullptr;  // See the limitation note above.
++        }
++        return TRUE;
++
++      case kUninitialised: {
++        // Claim the right to run the callback.
++        if (::InterlockedCompareExchangePointer(
++                const_cast<PVOID*>(slot), AsPtr(kRunning),
++                AsPtr(kUninitialised)) != AsPtr(kUninitialised)) {
++          continue;  // Someone else claimed it; re-read the state.
++        }
++
++        PVOID callback_context = nullptr;
++        const BOOL ok = InitFn(InitOnce, Parameter, &callback_context);
++
++        // On failure reset to uninitialised, which is what the real API does:
++        // a failed attempt leaves the next caller free to try again.
++        ::InterlockedExchangePointer(const_cast<PVOID*>(slot),
++                                     AsPtr(ok ? kDone : kUninitialised));
++
++        if (ok && Context) {
++          *Context = callback_context;
++        }
++        return ok;
++      }
++
++      default:
++        // kRunning: another thread is in the callback. Yield and re-check.
++        if (!::SwitchToThread()) {
++          ::Sleep(1);
++        }
++        break;
++    }
++  }
++}
+diff --git a/third_party/winwrap/redirects.cc b/third_party/winwrap/redirects.cc
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/redirects.cc
+@@ -0,0 +1,70 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Static-link redirection.
++//
++// A `__declspec(dllimport)` call site does not call the function directly; it
++// loads a pointer from `__imp_<name>` and calls through it. The Windows SDK
++// declares every Win32 function that way, so defining `__imp_<name>` ourselves
++// is enough to capture the call -- the linker resolves the reference here and
++// never extracts kernel32.lib's member for that symbol. No duplicate symbol,
++// because archive members are only pulled to satisfy *still undefined*
++// references, and no source change at any call site.
++//
++// kernel32.lib is never named in Chromium's GN: it arrives through the
++// /DEFAULTLIB directives the SDK headers embed in every object file, and those
++// are processed after libraries given on the command line. So an explicitly
++// linked winwrap wins without having to reorder anything.
++//
++// The symbol name is decorated differently per architecture:
++//
++//   x64   __imp_GetTickCount64
++//   x86   __imp__GetTickCount64@0     leading underscore, stdcall byte count
++//
++// The x86 form is not a legal C identifier, hence the asm label. The byte
++// count is the total size of the arguments: 0 for a void function, 4 per
++// pointer-sized parameter.
++//
++// === Why the SRWLOCK redirects are XP-only ===
++//
++// Do not link these on Vista. Vista exports the whole SRWLOCK family except
++// TryAcquireSRWLock{Shared,Exclusive}, and redirecting only those two would
++// point our CRITICAL_SECTION-based Try at a lock whose Ptr field the real
++// Vista implementation owns -- reading its internals as if they were our
++// pointer. The family has to be all ours or all the system's, and on Vista
++// there is no way to make it all ours while leaving Acquire/Release native.
++//
++// That is why Vista is handled instead by teaching libuv that the Try variants
++// can be absent (patches/node/06-node-xp-vista-support.patch returns UV_ENOSYS),
++// and why winwrap's SRWLOCK set exists for XP, where nothing else provides it.
++
++#include "winwrap.h"
++
++#if defined(_M_IX86)
++#define WINWRAP_IMP_SYMBOL(name, bytes) "__imp__" #name "@" #bytes
++#else
++#define WINWRAP_IMP_SYMBOL(name, bytes) "__imp_" #name
++#endif
++
++// Deliberately not `const`: at namespace scope a const object has internal
++// linkage in C++, which would let the definition be discarded despite the asm
++// label, and the reference it is meant to satisfy would fall through to
++// kernel32 again.
++#define WINWRAP_REDIRECT(name, bytes)                     \
++  extern "C" decltype(&winwrap_##name) winwrap_imp_##name \
++      __asm__(WINWRAP_IMP_SYMBOL(name, bytes)) = &winwrap_##name
++
++// --- Available on Vista and later, missing on XP ---------------------------
++WINWRAP_REDIRECT(GetTickCount64, 0);
++WINWRAP_REDIRECT(InitOnceExecuteOnce, 16);
++
++WINWRAP_REDIRECT(InitializeSRWLock, 4);
++WINWRAP_REDIRECT(AcquireSRWLockExclusive, 4);
++WINWRAP_REDIRECT(ReleaseSRWLockExclusive, 4);
++WINWRAP_REDIRECT(AcquireSRWLockShared, 4);
++WINWRAP_REDIRECT(ReleaseSRWLockShared, 4);
++
++// --- Missing on XP and Vista alike -----------------------------------------
++WINWRAP_REDIRECT(TryAcquireSRWLockExclusive, 4);
++WINWRAP_REDIRECT(TryAcquireSRWLockShared, 4);
+diff --git a/third_party/winwrap/srwlock.cc b/third_party/winwrap/srwlock.cc
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/srwlock.cc
+@@ -0,0 +1,115 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// SRWLOCK on top of CRITICAL_SECTION.
++//
++// SRWLOCK is one pointer wide (RTL_SRWLOCK is `struct { PVOID Ptr; }`) and a
++// CRITICAL_SECTION does not fit in it, so Ptr holds a pointer to a lazily
++// allocated one. SRWLOCK_INIT and InitializeSRWLock both leave Ptr null, which
++// is the "not yet allocated" state, so a lock initialised either way works.
++//
++// Two deliberate semantic differences, both safe but worth knowing:
++//
++//  - Shared acquisition is exclusive. A CRITICAL_SECTION has no shared mode,
++//    so readers serialise against each other. That costs concurrency and never
++//    correctness: code written for a reader/writer lock is always correct under
++//    a mutex.
++//  - CRITICAL_SECTION is recursive, SRWLOCK is not. Taking the same lock twice
++//    on one thread deadlocks on a real SRWLOCK and succeeds here. That turns a
++//    deadlock into forward progress, so it hides bugs rather than creating
++//    them, but it means this is not a conformance-grade replacement.
++//
++// The allocation is never freed. That is not a leak that can be fixed: the
++// SRWLOCK API has no destroy call, so there is no hook to free it from. One
++// CRITICAL_SECTION per lock, for process lifetime.
++//
++// Chromium's own base takes this same trade in
++// patches/chromium/base/0315-migrate-from-critical-section-to-srwlock.patch,
++// which reverts upstream's move to SRWLOCK and gets LockImpl back onto
++// critical sections.
++
++#include "winwrap.h"
++
++namespace {
++
++// Spin a little before sleeping, which is what the real SRWLOCK does and what
++// makes uncontended acquisition cheap.
++constexpr DWORD kSpinCount = 2000;
++
++CRITICAL_SECTION* EnsureSection(PSRWLOCK lock) {
++  PVOID volatile* slot = reinterpret_cast<PVOID volatile*>(&lock->Ptr);
++
++  // Fast path: already installed. A plain read would be enough on x86/x64 for
++  // a pointer-sized slot, but this keeps the atomicity explicit.
++  if (PVOID existing = ::InterlockedCompareExchangePointer(
++          const_cast<PVOID*>(slot), nullptr, nullptr)) {
++    return static_cast<CRITICAL_SECTION*>(existing);
++  }
++
++  auto* fresh = static_cast<CRITICAL_SECTION*>(
++      ::HeapAlloc(::GetProcessHeap(), 0, sizeof(CRITICAL_SECTION)));
++  if (!fresh) {
++    // Nothing useful to return and no way to report failure through a void
++    // API. Failing loudly beats handing back a lock that does not lock.
++    ::RaiseException(STATUS_NO_MEMORY, EXCEPTION_NONCONTINUABLE, 0, nullptr);
++    return nullptr;
++  }
++
++  // The AndSpinCount form returns a BOOL instead of raising on low memory, and
++  // is available on XP.
++  if (!::InitializeCriticalSectionAndSpinCount(fresh, kSpinCount)) {
++    ::HeapFree(::GetProcessHeap(), 0, fresh);
++    ::RaiseException(STATUS_NO_MEMORY, EXCEPTION_NONCONTINUABLE, 0, nullptr);
++    return nullptr;
++  }
++
++  PVOID won = ::InterlockedCompareExchangePointer(const_cast<PVOID*>(slot),
++                                                  fresh, nullptr);
++  if (won == nullptr) {
++    return fresh;  // We installed ours.
++  }
++
++  // Another thread got there first; discard ours and use theirs.
++  ::DeleteCriticalSection(fresh);
++  ::HeapFree(::GetProcessHeap(), 0, fresh);
++  return static_cast<CRITICAL_SECTION*>(won);
++}
++
++}  // namespace
++
++extern "C" {
++
++VOID WINAPI winwrap_InitializeSRWLock(PSRWLOCK SRWLock) {
++  // Match SRWLOCK_INIT rather than allocating here, so a lock that was
++  // zero-initialised instead of initialised through this call behaves the
++  // same. The CRITICAL_SECTION appears on first acquisition.
++  SRWLock->Ptr = nullptr;
++}
++
++VOID WINAPI winwrap_AcquireSRWLockExclusive(PSRWLOCK SRWLock) {
++  ::EnterCriticalSection(EnsureSection(SRWLock));
++}
++
++VOID WINAPI winwrap_ReleaseSRWLockExclusive(PSRWLOCK SRWLock) {
++  ::LeaveCriticalSection(EnsureSection(SRWLock));
++}
++
++// Shared maps onto exclusive; see the note at the top of the file.
++VOID WINAPI winwrap_AcquireSRWLockShared(PSRWLOCK SRWLock) {
++  ::EnterCriticalSection(EnsureSection(SRWLock));
++}
++
++VOID WINAPI winwrap_ReleaseSRWLockShared(PSRWLOCK SRWLock) {
++  ::LeaveCriticalSection(EnsureSection(SRWLock));
++}
++
++BOOLEAN WINAPI winwrap_TryAcquireSRWLockExclusive(PSRWLOCK SRWLock) {
++  return ::TryEnterCriticalSection(EnsureSection(SRWLock)) ? TRUE : FALSE;
++}
++
++BOOLEAN WINAPI winwrap_TryAcquireSRWLockShared(PSRWLOCK SRWLock) {
++  return ::TryEnterCriticalSection(EnsureSection(SRWLock)) ? TRUE : FALSE;
++}
++
++}  // extern "C"
+diff --git a/third_party/winwrap/tick_count.cc b/third_party/winwrap/tick_count.cc
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/tick_count.cc
+@@ -0,0 +1,50 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// GetTickCount64 on top of GetTickCount.
++//
++// GetTickCount returns 32-bit milliseconds and wraps every ~49.7 days.
++// GetTickCount64 does not, and callers rely on that: a comparison across a
++// wrap would jump backwards by 49 days, which in Chromium and libuv means
++// timers that never fire or fire immediately.
++//
++// So keep the high half ourselves and extend it whenever the low half is
++// observed to go backwards. That is correct as long as this is called at least
++// once per wrap period, which any running browser does many times a second.
++// A process that sleeps for more than 49.7 days between calls would miss a
++// wrap -- the same caveat every implementation of this shim has.
++
++#include "winwrap.h"
++
++namespace {
++
++// Last value handed out, as a full 64-bit count. Interlocked so concurrent
++// callers cannot observe it going backwards.
++volatile LONGLONG g_last_tick = 0;
++
++}  // namespace
++
++extern "C" ULONGLONG WINAPI winwrap_GetTickCount64(void) {
++  const ULONGLONG now32 = ::GetTickCount();
++
++  for (;;) {
++    const LONGLONG prev = ::InterlockedCompareExchange64(&g_last_tick, 0, 0);
++    const ULONGLONG prev_u = static_cast<ULONGLONG>(prev);
++
++    // Splice the fresh low half onto the high half we have been tracking.
++    ULONGLONG candidate = (prev_u & 0xFFFFFFFF00000000ull) | now32;
++
++    // Going backwards means the 32-bit counter wrapped since last time.
++    if (candidate < prev_u) {
++      candidate += 0x100000000ull;
++    }
++
++    if (::InterlockedCompareExchange64(&g_last_tick,
++                                       static_cast<LONGLONG>(candidate),
++                                       prev) == prev) {
++      return candidate;
++    }
++    // Lost the race; another thread advanced it. Retry against the new value.
++  }
++}
+diff --git a/third_party/winwrap/winwrap.def b/third_party/winwrap/winwrap.def
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/winwrap.def
+@@ -0,0 +1,20 @@
++; Shared-library mode: export the public Win32 names, aliased onto the
++; winwrap_ implementations, so the generated import library provides
++; __imp_<name> and the linker binds there instead of kernel32.
++;
++; NOTE: verified for x64 only. On x86 the alias target needs the decorated
++; symbol (_winwrap_GetTickCount64@0 and so on), so this file is not yet
++; correct for 32-bit shared builds. The static mode -- the default -- handles
++; both architectures and is the tested path; see redirects.cc.
++LIBRARY winwrap
++EXPORTS
++    DllGetVersion
++    GetTickCount64 = winwrap_GetTickCount64
++    InitOnceExecuteOnce = winwrap_InitOnceExecuteOnce
++    InitializeSRWLock = winwrap_InitializeSRWLock
++    AcquireSRWLockExclusive = winwrap_AcquireSRWLockExclusive
++    ReleaseSRWLockExclusive = winwrap_ReleaseSRWLockExclusive
++    AcquireSRWLockShared = winwrap_AcquireSRWLockShared
++    ReleaseSRWLockShared = winwrap_ReleaseSRWLockShared
++    TryAcquireSRWLockExclusive = winwrap_TryAcquireSRWLockExclusive
++    TryAcquireSRWLockShared = winwrap_TryAcquireSRWLockShared
+diff --git a/third_party/winwrap/winwrap.gni b/third_party/winwrap/winwrap.gni
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/winwrap.gni
+@@ -0,0 +1,25 @@
++# Copyright 2026 Alex313031. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++declare_args() {
++  # Link winwrap, which supplies Win32 functions that pre-Win7 Windows does not
++  # export so a binary built against a current SDK still loads there.
++  #
++  # Off by default, and deliberately not implied by target_os == "win": the
++  # redirects capture every call in the binary, so an ordinary build would get
++  # a CRITICAL_SECTION in place of a real SRWLOCK for no reason. Turn it on for
++  # a build that actually has to run on XP.
++  use_winwrap = false
++
++  # Build winwrap as winwrap.dll instead of linking winwrap.lib into every
++  # binary.
++  #
++  # Static is the default on purpose. It ships nothing extra, so there is no
++  # separate binary for anyone to have to trust or audit -- which is the whole
++  # reason this exists rather than consuming someone else's prebuilt wrapper
++  # DLL. The shared form is here for the case where several binaries should
++  # share one copy, or where you want to swap the implementation without
++  # relinking.
++  is_component_winwrap = false
++}
+diff --git a/third_party/winwrap/winwrap.h b/third_party/winwrap/winwrap.h
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/winwrap.h
+@@ -0,0 +1,51 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef WINWRAP_WINWRAP_H_
++#define WINWRAP_WINWRAP_H_
++
++// winwrap provides implementations of Win32 functions that do not exist on the
++// older Windows versions this fork targets, so a binary compiled against a
++// current SDK still loads there. A statically imported symbol the target OS
++// does not export is fatal at load, before any of our code runs, which is why
++// per-call-site workarounds cannot solve it.
++//
++// Nothing here calls the function it replaces, and nothing here uses an API
++// newer than Windows XP -- winwrap has to run on the oldest target itself.
++//
++// Each implementation is named winwrap_<Win32Name> and keeps the exact
++// signature of the function it stands in for, so the redirect in redirects.cc
++// is a plain assignment with no casting.
++
++#include <windows.h>
++
++#include "winwrap_version.h"
++
++extern "C" {
++
++// --- Tick count ------------------------------------------------------------
++// GetTickCount64: Vista+.
++ULONGLONG WINAPI winwrap_GetTickCount64(void);
++
++// --- Slim reader/writer locks ----------------------------------------------
++// The whole SRWLOCK family is Vista+, so XP needs all of it; Vista has
++// everything except the two TryAcquire variants.
++VOID WINAPI winwrap_InitializeSRWLock(PSRWLOCK SRWLock);
++VOID WINAPI winwrap_AcquireSRWLockExclusive(PSRWLOCK SRWLock);
++VOID WINAPI winwrap_ReleaseSRWLockExclusive(PSRWLOCK SRWLock);
++VOID WINAPI winwrap_AcquireSRWLockShared(PSRWLOCK SRWLock);
++VOID WINAPI winwrap_ReleaseSRWLockShared(PSRWLOCK SRWLock);
++BOOLEAN WINAPI winwrap_TryAcquireSRWLockExclusive(PSRWLOCK SRWLock);
++BOOLEAN WINAPI winwrap_TryAcquireSRWLockShared(PSRWLOCK SRWLock);
++
++// --- One-time initialisation -----------------------------------------------
++// InitOnceExecuteOnce: Vista+. libuv's uv_once() is built directly on this.
++BOOL WINAPI winwrap_InitOnceExecuteOnce(PINIT_ONCE InitOnce,
++                                        PINIT_ONCE_FN InitFn,
++                                        PVOID Parameter,
++                                        LPVOID* Context);
++
++}  // extern "C"
++
++#endif  // WINWRAP_WINWRAP_H_
+diff --git a/third_party/winwrap/winwrap.rc b/third_party/winwrap/winwrap.rc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d023b647593d5fb3b39584c504df760ff13491a
+GIT binary patch
+literal 5464
+zcmd6rS#KLx42AiuUon+mY@kh?*g(-X3E)Lml*kLT*a=`jkawf9Wk`120R8Q4zr*XB
+zSu~?qNFR!UG#f9;dw9spJOBK>WM_767j|v8oD<uy1M6DP`nGK?+qZ#rtijW5uJ^2M
+zpLx>df7dp7(&oCxvE<`VZDbFwFR{8k`m;xy*wF46^#}SVHs$FUTQBSi8I66(k=SAG
+zZDJ?r8r!M;&O6DE?2G-%^(}V^Hm=bsiAyv}V#5EaOWt!m=H1kO<k^(#IO>f{+}I6g
+zNsZi#cf7xH>*w5SF5g1rJ;-cxG(cn)jae+-JYjK$FOPVnxxaHu56mZ6D?@(1oify;
+zr3v#%?MQOIrRT&r#Hmlj6J~x3@*|=!WiG<`-f_MmD)*p!<xhmFn6PT={C@HCCjWJw
+zPCWu*-6eO~Xb&9|X$<3gL`u)5*pv3aAB{QZi4YA@yN1Py{g8{^nJvTJ9sBge<1U=-
+z!{{w$Fd%|$jul4z#UWOunUEdXLr2G&j8Me;jHoeggX<=D8~isI9iIfLCig9{dhh6T
+zk=v}481Pnkw1j=}K{JV2buot@Ej&16Mjx@i?IS{r_B<AKdxcj$-hJX<vRindylxNy
+z<&qE<qRNjUSs~7(xC{NETUTzyXar`B;nRdTE57IMvEnZ|<@+_#(iL-iO77keFJ)!o
+zxfAS+9h+jj#i|qJ<eTI|#?RVS4(k1Kg@m$f#ko<l*T|J4Q6nx5A}D-nNQI;B745>K
+zAx@NKXCD1y=6#I3YFb{)EjVTCV!gBy))`%{A>~AsM3%Q@p3bWyRXUZKMZZHu&sMQI
+z^R3b_zvBG2KBe`p+M{EyJT;=d_mnMbL~1csl+Sfmb2gKcrxk8?Wz93FdM#`biwn=M
+zP+vm@tdaX&YSJMy>TspiTI-Rt?r^O&HTxz$7e9B9YV$TPk=T)sK0=?o9k9x8*aviV
+zX6&fu&q~Y2bEP+_Me<^MMz=gXz~(;h`c$pn|Jcun<c?SOCUFpEU23xMSA2FHZJh(=
+zWs;$8uiBq*G(FZB6KiOyYv9-@vJH=+tZDrbHzxE;s)<8>cif%ZPpkqj(5dzEfyz3f
+zTB~N}yD`=GvDasf)|#$$HStQmV!u6IX@yj8b%#XsYYa10A5W<9L4JzWkv~)47S@Pa
+zrd07Naj%Dr)A}QC<bUXOWM>ggZ|yB3R=pw@yE^f!h@oPnRlLclZ{uAavsKobw)-m-
+zgoW6=sCD_Ats!y#u~$^@(qQH4<7+mbqyOE)3{q+JIw8B}&Aw`Gub5k`XWPt8oC^J0
+z<W}%Io%t;5^Vk+y{5{^SX1wb-3)R6W23hv!k=0rqW?O~nKKUh|bskXPdi)0#YEN{;
+z(>3oeikPYA)v@kgEhDKlHLjkCYf`4_SprwoiD`$V?oxY*wDT)+KJ=~GxcAtR9e5Qu
+zgv0VM$i%r7D@!>`W2|PiX-BxhuSGQ;FrOCOtJeK95_y!fzJ^}7XyY|{`(X0XSCAwA
+ztMx0+<$ara?0tMx^{o>b?efANV~6tyeB)Z0?bFISz}Um(HJ0sUvT+aloW$!+)lMnI
+zVjTokl~tkoaNwGXH--t~>M}L&wR1;Yh@QmrJa41SA<<H=uXUjg9%EJq_4l_RGUbU@
+z@8Yoqa=RSrk9uG?YdMZ6(|+en{=(R>lPKB<+7Iw+53cTUmZj&~h|yEcnSzv}ddFNs
+zClqZ({)SBMGVc!YK43PB+R1;7i2CFFi}{%EqVz?e=a#iUe6D5jGUUJZVxtNi)nBP&
+z?KpyMa%NE^+aP%97Q~7>R&8N<$!dF_;e~p`rgLZjiu+*r*=N*bKl^+%Q(IvVFLtM0
+zN<>vy>HAW{JEso0`+V;0KY6bl7iy6waX%Yus3UDLpR@;C6tx5FC_5kE-hD-EiaqP%
+zvB_Jh;^6nOFYbOKmy7rLdUpt_ldq^QT028!+yym#?Fk)f@#~P*J$(au;Cu-`UVg2E
+zswjG*uY2nJ;unZ{RbA_R`rUBI-Pk)_b&zq!@tm(><zJZse`3YfH!M}oSe;Xy5yg1^
+E7p-yt)c^nh
+
+literal 0
+HcmV?d00001
+
+diff --git a/third_party/winwrap/winwrap_version.h b/third_party/winwrap/winwrap_version.h
+new file mode 100644
+--- /dev/null
++++ b/third_party/winwrap/winwrap_version.h
+@@ -0,0 +1,65 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef WINWRAP_WINWRAP_VERSION_H_
++#define WINWRAP_WINWRAP_VERSION_H_
++
++#ifndef UNICODE
++ #define UNICODE
++#endif
++
++#ifndef _UNICODE
++ #define _UNICODE
++#endif
++
++// Macro to convert to string
++#if !defined(_STRINGIZER_)
++ #define _STRINGIZER_
++ #define _STRINGIZER(in) #in
++ #define STRINGIZE(in) _STRINGIZER(in)
++  // Wide-string variant: L ## "x" -> L"x". Two levels so the argument expands
++ // before the L## paste widens the resulting narrow literal.
++ #define _WIDEN(in) L ## in
++ #define WIDEN(in) _WIDEN(in)
++#endif // !defined(_STRINGIZER_)
++
++// Builds L"major.minor.build" from a binary's own numbers; each version.h
++// defines its VERSION_STRING with this.
++#ifndef _VERSION
++ // Run stringizer above
++ #define _VERSION(major,minor,build) WIDEN(STRINGIZE(major.minor.build))
++#endif // _VERSION
++
++// Adhere to semver -> semver.org
++#define WINWRAP_MAJOR_VERSION 0
++#define WINWRAP_MINOR_VERSION 1
++#define WINWRAP_BUILD_VERSION 0
++
++#define WINWRAP_VERSION_STRING \
++        _VERSION(WINWRAP_MAJOR_VERSION, WINWRAP_MINOR_VERSION, WINWRAP_BUILD_VERSION) // L"0.1.0"
++
++// Base name as a BARE token (not a "..." literal) so STRINGIZE can fold it
++// into the composite literals below.
++#define INTERNAL_TOKENS winwrap
++
++#define FILE_DESCRIPT L"Legacy Win32 Support Library" // File description
++#define INTERNAL_NAME WIDEN(STRINGIZE(INTERNAL_TOKENS)) // L"winwrap"
++#ifdef WINWRAP_DLL
++ #define ORIG_FILENAME WIDEN(STRINGIZE(INTERNAL_TOKENS.dll)) // L"winwrap.dll"
++#else
++ #define ORIG_FILENAME WIDEN(STRINGIZE(INTERNAL_TOKENS.lib)) // L"winwrap.lib"
++#endif
++#define PRODUCT_NAME  INTERNAL_NAME // Product name
++
++#ifndef VS_FF_RELEASE
++ #define VS_FF_RELEASE 0x00000000L
++#endif
++
++// Vendor strings shared by every binary's VERSIONINFO
++#define COMMENTS        L"https://github.com/Alex313031/electron-legacy" // Project GitHub URL
++#define COMPANYNAME     L"Alex313031" // My developer name
++#define TRADEMARKS      L"BSD-3" // License
++#define LEGAL_COPYRIGHT L"\251 2026 Alex313031" // \251 is the © symbol
++
++#endif // WINWRAP_WINWRAP_VERSION_H_

@@ -12,3 +12,4 @@
 12-hevc-software-decoding.patch
 13-ac3-eac3-mpeg2-software-decoding.patch
 14-widevine-loader.patch
+15-xp-vista-support.patch

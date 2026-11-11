@@ -1,0 +1,98 @@
+Title: Resolve TryAcquireSRWLock{Shared,Exclusive} at runtime for Vista
+Origin: electron-legacy (this repo)
+
+First blocker for Windows Vista. Electron reached the loader and died there:
+
+  The procedure entry point TryAcquireSRWLockExclusive could not be located in
+  the dynamic link library KERNEL32.dll
+
+Both functions are Windows 7+. Vista shipped the SRW family -- InitializeSRWLock,
+AcquireSRWLock{Shared,Exclusive} and their releases all exist there -- but not
+the two non-blocking variants, and a static import of a symbol the DLL does not
+export is fatal at load, before any of our code runs. That makes this a hard
+gate rather than a bug you can reach and work around.
+
+libuv already resolves SetThreadDescription and GetThreadDescription this way in
+the same file, with a uv_once_t guard, a p-prefixed pointer and UV_ENOSYS when
+the symbol is absent. This follows that pattern exactly rather than inventing a
+second convention.
+
+UV_ENOSYS rather than a fallback is deliberate. There is no way to ask a Vista
+SRWLock for the lock without blocking, and returning 0 would tell a caller it
+holds a lock it does not, corrupting whatever that lock guards. Reporting "this
+platform cannot do that" is the honest answer, and it costs nothing here:
+uv_rwlock_tryrdlock and uv_rwlock_trywrlock have no callers in Node or Electron.
+The only ones in the tree are in libuv's own deps/uv/test/test-mutexes.c, which
+is not part of this build -- verified by grep across electron_node.
+
+Does not fix Vista on its own; it is the first symbol in the way.
+
+diff --git a/deps/uv/src/win/thread.c b/deps/uv/src/win/thread.c
+--- a/deps/uv/src/win/thread.c
++++ b/deps/uv/src/win/thread.c
+@@ -60,6 +60,9 @@
+ static uv_once_t uv__thread_name_once = UV_ONCE_INIT;
+ HRESULT (WINAPI *pGetThreadDescription)(HANDLE, PWSTR*);
+ HRESULT (WINAPI *pSetThreadDescription)(HANDLE, PCWSTR);
++static uv_once_t uv__srwlock_try_once = UV_ONCE_INIT;
++BOOLEAN (WINAPI *pTryAcquireSRWLockShared)(PSRWLOCK);
++BOOLEAN (WINAPI *pTryAcquireSRWLockExclusive)(PSRWLOCK);
+ 
+ 
+ static void uv__init_current_thread_key(void) {
+@@ -426,8 +429,40 @@
+ }
+ 
+ 
++/* TryAcquireSRWLockShared and TryAcquireSRWLockExclusive are Windows 7+. Vista
++ * has the rest of the SRW family but not these two, and a static import of a
++ * symbol kernel32 does not export stops the image loading at all -- which is
++ * exactly how Electron failed on Vista:
++ *
++ *   The procedure entry point TryAcquireSRWLockExclusive could not be located
++ *   in the dynamic link library KERNEL32.dll
++ *
++ * So resolve them the way this file already resolves SetThreadDescription, and
++ * report UV_ENOSYS where they are missing rather than faking success: a caller
++ * told it took the lock when it did not would corrupt whatever the lock guards.
++ * Nothing in Node or Electron calls uv_rwlock_tryrdlock/trywrlock -- libuv's
++ * own test suite is the only caller in the tree, and it is not built here -- so
++ * on Vista this trades an unreachable code path for a process that starts. */
++static void uv__srwlock_try_init_once(void) {
++  HMODULE m;
++
++  m = GetModuleHandleW(L"kernel32.dll");
++  if (m != NULL) {
++    pTryAcquireSRWLockShared = (void*)
++        GetProcAddress(m, "TryAcquireSRWLockShared");
++    pTryAcquireSRWLockExclusive = (void*)
++        GetProcAddress(m, "TryAcquireSRWLockExclusive");
++  }
++}
++
++
+ int uv_rwlock_tryrdlock(uv_rwlock_t* rwlock) {
+-  if (!TryAcquireSRWLockShared(&rwlock->read_write_lock_))
++  uv_once(&uv__srwlock_try_once, uv__srwlock_try_init_once);
++
++  if (pTryAcquireSRWLockShared == NULL)
++    return UV_ENOSYS;
++
++  if (!pTryAcquireSRWLockShared(&rwlock->read_write_lock_))
+     return UV_EBUSY;
+ 
+   return 0;
+@@ -445,7 +480,12 @@
+ 
+ 
+ int uv_rwlock_trywrlock(uv_rwlock_t* rwlock) {
+-  if (!TryAcquireSRWLockExclusive(&rwlock->read_write_lock_))
++  uv_once(&uv__srwlock_try_once, uv__srwlock_try_init_once);
++
++  if (pTryAcquireSRWLockExclusive == NULL)
++    return UV_ENOSYS;
++
++  if (!pTryAcquireSRWLockExclusive(&rwlock->read_write_lock_))
+     return UV_EBUSY;
+ 
+   return 0;
