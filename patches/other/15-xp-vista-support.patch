@@ -95,7 +95,7 @@ owns. The family is all ours or all the system's.
 diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
 --- a/build/config/BUILD.gn
 +++ b/build/config/BUILD.gn
-@@ -19,6 +19,7 @@ import("//build/config/pch.gni")
+@@ -19,6 +19,7 @@
  import("//build/config/rust.gni")
  import("//build/config/sanitizers/sanitizers.gni")
  import("//build/config/ui.gni")
@@ -103,15 +103,7 @@ diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
  if (is_android) {
    import("//build/config/android/abi.gni")
  }
-@@ -164,6 +165,7 @@ config("default_libs") {
-       "odbc32.lib",
-       "odbccp32.lib",
-       "oleaut32.lib",
-+      "psapi.lib",
-       "shell32.lib",
-       "shlwapi.lib",
-       "user32.lib",
-@@ -292,6 +294,22 @@ group("common_deps") {
+@@ -293,6 +294,22 @@
      # crbug.com/402171653 for context.
      public_deps += [ "//third_party/compiler-rt:atomic" ]
    }
