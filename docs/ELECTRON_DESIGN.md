@@ -4,7 +4,7 @@ A medium-to-high level tour of the `electron/electron` repository: how it grafts
 itself onto Chromium, how it patches its upstreams, how a build is assembled,
 and how the pieces fit together at runtime.
 
-Written against the Electron **44.10.2** tree (Chromium 152.0.7977.169, Node
+Written against the Electron **44.11.1** tree (Chromium 152.0.7977.169, Node
 v24.22.2). Specific line numbers are deliberately avoided; file paths and target
 names are given so you can go look. Everything here describes the *Electron*
 repo — not Chromium, and not this repo's own build scripts.
@@ -195,27 +195,35 @@ still gets a fresh mtime.
 ## 4. The patch system
 
 Everything outside `src/electron` that Electron needs to modify is modified via
-patches. 527 patches across 21 targets in this tree:
+patches. 663 patches across 21 targets in this tree:
 
 | Target | Patches | Repo |
 |---|---:|---|
-| `chromium` | 332 | `src` |
+| `chromium` | 402 | `src` |
+| `v8` | 66 | `src/v8` |
 | `node` | 64 | `src/third_party/electron_node` |
-| `angle` | 46 | `src/third_party/angle` |
-| `v8` | 31 | `src/v8` |
+| `angle` | 54 | `src/third_party/angle` |
+| `skia` | 14 | `src/third_party/skia` |
+| `dawn` | 12 | `src/third_party/dawn` |
 | `nan` | 11 | `src/third_party/nan` |
-| `skia` | 8 | `src/third_party/skia` |
-| `pdfium`, `dawn` | 7 each | … |
+| `pdfium` | 10 | `src/third_party/pdfium` |
+| `devtools_frontend` | 8 | `src/third_party/devtools-frontend/src` |
+| `ffmpeg` | 4 | `src/third_party/ffmpeg` |
 | `fontconfig` | 3 | `src/third_party/fontconfig/src` |
-| `boringssl`, `devtools_frontend`, `libyuv`, `ReactiveObjC`, `squirrel.mac`, `webrtc` | 2 each | … |
-| `ffmpeg`, `icu`, `libaom`, `libvpx`, `perfetto`, `sqlite` | 1 each | … |
+| `boringssl`, `libyuv`, `ReactiveObjC`, `squirrel.mac`, `webrtc` | 2 each | … |
+| `icu`, `libaom`, `libvpx`, `perfetto`, `sqlite` | 1 each | … |
 
-Those counts drift upward across a release line rather than staying put: a
-`.10.x` carries months of accumulated security backports that a `.2.0` does not.
-Most of `angle`'s are literally named `cherry-pick-<sha>.patch`, and the same
-pressure is why `chromium` nearly doubled between 44.2.0 and 44.10.2. Treat the
-numbers as a snapshot; `patches/config.json` is the source of truth for which
-targets exist, and each directory's `.patches` file for the order they apply in.
+Do not trust those numbers for long. They are a snapshot of one point release,
+and the count climbs steeply within a release line as security fixes are
+backported: 44.10.2 → 44.11.1 added **136 patches** without moving the pinned
+Chromium or Node revision at all — `chromium` +70, `v8` +35, `angle` +8. Many
+are literally named `cherry-pick-<sha>.patch`. The structure is what is stable
+here; the arithmetic is not.
+
+`patches/config.json` is the source of truth for which targets exist and where
+each applies, and each directory's `.patches` file for the order within it.
+Counting `*.patch` per `patch_dir` reproduces this table — note those paths are
+relative to the gclient root, not to `src/electron`.
 
 ### Configuration
 

@@ -10,12 +10,12 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.2"
+SCRIPTVER="1.3.3"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Electron release the patches in patches/ are made for.
-ELECTRON_VERSION="44.10.2"
+ELECTRON_VERSION="44.11.1"
 
 # The gclient root: .gclient and the state files beside it (.gclient_entries,
 # .cipd/, .gcs_entries), plus src/, dist/ and build.log. Kept in a subdirectory
@@ -204,7 +204,7 @@ Options:
                               end, and writes no stamp.
   -s, --sync                  Re-sync existing sources before building (same reset as -d).
                               Without an arch it just syncs, then exits.
-      --reset                 Put src/ back to stock -- synced sources with
+  -r, --reset                 Put src/ back to stock -- synced sources with
                               Electron's own patches and none of ours -- without
                               re-cloning or re-syncing. Seconds, not the hour a
                               sync costs. Combine with -p to reset and re-apply
@@ -400,7 +400,7 @@ parse_args() {
       -d|--download-sources) ONLY_DOWNLOAD=true ;;
       -p|--patch) ONLY_PATCH=true ;;
       -s|--sync) DO_SYNC=true ;;
-      --reset) DO_RESET=true ;;
+      -r|--reset) DO_RESET=true ;;
       -b|--build-only) BUILD_ONLY=true ;;
       -k|--keep-going) KEEP_GOING=true ;;
       --full-history) SHALLOW=false ;;
@@ -678,7 +678,7 @@ reset_sources() {
   [ -d "$ELECTRON_PATH/.git" ] \
       || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
 
-  VERBOSE=1 execute "Resetting $SRC_PATH to stock" "Unable to reset the checkout" \
+  VERBOSE=1 execute "Resetting $SRC_PATH to stock (v$ELECTRON_VERSION)" "Unable to reset the checkout" \
       py "$HERE/tools/reset_sources.py" \
       --patches "$PATCHES_PATH" \
       --series "chromium=$SRC_PATH" \

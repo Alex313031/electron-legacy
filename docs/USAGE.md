@@ -5,7 +5,7 @@ To add it to a project, put it in `devDependencies` in your `package.json`:
 ```json
 {
   "devDependencies": {
-    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.2.0"
+    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.10.2"
   }
 }
 ```
