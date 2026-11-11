@@ -55,11 +55,16 @@ fails to compile instead of becoming a runtime surprise on XP. winwrap still
 builds because it needs only the types, which live ungated in winnt.h, and
 never calls the functions it stands in for.
 
-winwrap.rc is UTF-16LE with a BOM, and carried in this patch as a GIT binary
-hunk for that reason. rc.py passes /utf-8 to the resource compiler only when
-the .rc itself starts with a UTF-16LE BOM; without it the compiler rejects any
-character above 7-bit ASCII, which the \251 in LEGAL_COPYRIGHT is. Re-saving
-that file as UTF-8 breaks the resource build.
+Everything here is 7-bit ASCII, deliberately. rc.py passes /utf-8 to the
+resource compiler only when the .rc itself opens with a UTF-16LE BOM; without
+one the compiler rejects any character above 7-bit ASCII -- including one
+produced by an escape, so L"\251 ..." for the copyright sign fails just as a
+literal would. Making the .rc UTF-16 fixes that but then the patch needs a GIT
+binary hunk, and a binary hunk is the one thing in this series that cannot
+survive a CRLF-converting checkout: it broke the Windows build server, where
+the other fourteen patches applied fine. LEGAL_COPYRIGHT therefore says "(c)",
+which keeps this patch pure text and keeps the .rc and its header from having
+to agree on an encoding forever.
 
 Linked in through //build/config:common_deps, which BUILD.gn calls out as a
 dependency of every executable and shared library. That is the right altitude
@@ -849,44 +854,99 @@ new file mode 100644
 +#endif  // WINWRAP_WINWRAP_H_
 diff --git a/third_party/winwrap/winwrap.rc b/third_party/winwrap/winwrap.rc
 new file mode 100644
-index 0000000000000000000000000000000000000000..1d023b647593d5fb3b39584c504df760ff13491a
-GIT binary patch
-literal 5464
-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
-E7p-yt)c^nh
-
-literal 0
-HcmV?d00001
-
+--- /dev/null
++++ b/third_party/winwrap/winwrap.rc
+@@ -0,0 +1,90 @@
++#define APSTUDIO_READONLY_SYMBOLS
++
++#include "winwrap_version.h"
++
++// Version block only: no dialogs or controls, so no <commctrl.h> here.
++#define APSTUDIO_HIDDEN_SYMBOLS
++#include <windows.h>
++#undef APSTUDIO_HIDDEN_SYMBOLS
++
++#include <winres.h>
++
++#undef APSTUDIO_READONLY_SYMBOLS
++
++// US English, to match the "040904B0" string block and the Translation below.
++#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
++LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
++#endif
++
++#ifdef APSTUDIO_INVOKED
++
++// No "1 TEXTINCLUDE": that names the header the resource editor writes
++// symbol IDs to, and the lib has no resource IDs (no resource.h).
++
++2 TEXTINCLUDE
++BEGIN
++    "#ifndef APSTUDIO_INVOKED\r\n"
++    "#include ""version.h""\r\n"
++    "#endif\r\n"
++    "#define APSTUDIO_HIDDEN_SYMBOLS\r\n"
++    "#include ""windows.h""\r\n"
++    "#undef APSTUDIO_HIDDEN_SYMBOLS\r\n"
++    "#include ""winres.h""\r\n"
++    "\0"
++END
++
++3 TEXTINCLUDE
++BEGIN
++    "\r\n"
++    "\0"
++END
++
++#endif // APSTUDIO_INVOKED
++
++// Version Information
++VS_VERSION_INFO VERSIONINFO
++ FILEVERSION WINWRAP_MAJOR_VERSION, WINWRAP_MINOR_VERSION, WINWRAP_BUILD_VERSION
++ PRODUCTVERSION WINWRAP_MAJOR_VERSION, WINWRAP_MINOR_VERSION, WINWRAP_BUILD_VERSION
++ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK // 0x0000003F
++// VS_FF_PRERELEASE marks a pre-1.0 build (version tools show it); it drops
++// off by itself once WINWRAP_MAJOR_VERSION reaches 1.
++#if WINWRAP_MAJOR_VERSION == 0
++ #define PRERELEASE_FLAG VS_FF_PRERELEASE // 0x00000002L
++#else
++ #define PRERELEASE_FLAG 0
++#endif
++#ifdef _DEBUG
++ FILEFLAGS VS_FF_DEBUG | PRERELEASE_FLAG // 0x00000001L // Debug build
++#else
++ FILEFLAGS VS_FF_RELEASE | PRERELEASE_FLAG // 0x00000000L // Release build
++#endif  // _DEBUG
++ FILEOS VOS_NT_WINDOWS32 // 0x00040004L (Windows NT and later)
++#ifdef WINWRAP_DLL
++ FILETYPE VFT_DLL // 0x00000002L
++#else
++ FILETYPE VFT_STATIC_LIB // 0x00000007L
++#endif
++ FILESUBTYPE VFT2_UNKNOWN // 0x00000000L
++BEGIN
++    BLOCK "StringFileInfo"
++    BEGIN
++        BLOCK "040904B0" // 0x0409 = US English, 0x04B0 = Unicode (1200)
++        BEGIN
++            VALUE "Comments",         COMMENTS
++            VALUE "CompanyName",      COMPANYNAME
++            VALUE "FileDescription",  FILE_DESCRIPT
++            VALUE "FileVersion",      WINWRAP_VERSION_STRING
++            VALUE "InternalName",     INTERNAL_NAME
++            VALUE "LegalCopyright",   LEGAL_COPYRIGHT
++            VALUE "LegalTrademarks",  TRADEMARKS
++            VALUE "OriginalFilename", ORIG_FILENAME
++            VALUE "ProductName",      PRODUCT_NAME
++            VALUE "ProductVersion",   WINWRAP_VERSION_STRING
++        END
++    END
++    BLOCK "VarFileInfo"
++    BEGIN
++        // Must match the language/codepage of the StringFileInfo block above.
++        VALUE "Translation", 0x0409, 1200
++    END
++END
 diff --git a/third_party/winwrap/winwrap_version.h b/third_party/winwrap/winwrap_version.h
 new file mode 100644
 --- /dev/null
@@ -954,6 +1014,6 @@ new file mode 100644
 +#define COMMENTS        L"https://github.com/Alex313031/electron-legacy" // Project GitHub URL
 +#define COMPANYNAME     L"Alex313031" // My developer name
 +#define TRADEMARKS      L"BSD-3" // License
-+#define LEGAL_COPYRIGHT L"\251 2026 Alex313031" // \251 is the © symbol
++#define LEGAL_COPYRIGHT L"(c) 2026 Alex313031" // ASCII on purpose: see winwrap.rc
 +
 +#endif // WINWRAP_WINWRAP_VERSION_H_
