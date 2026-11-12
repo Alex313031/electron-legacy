@@ -1,0 +1,152 @@
+Title: XP/Vista source fixes outside third_party/winwrap
+Origin: electron-legacy (this repo)
+
+The home for source changes legacy Windows needs that are not winwrap's job.
+winwrap substitutes missing Win32 functions wholesale (see
+18-winwrap-library.patch); this patch is for the cases better answered where
+the call is made.
+
+First of those: Electron calls shell32's SetCurrentProcessExplicitAppUserModelID
+and GetCurrentProcessExplicitAppUserModelID unconditionally, from four places
+across shell/common, shell/browser and shell/renderer. Both are Windows 7 and
+later. Vista has shell32, just an older one without them.
+
+That combination is worse than it sounds. shell32 is delay-imported, so the
+missing export is not fatal at load, and the process starts normally; the
+failure lands on the first call, inside Chromium's delay-load failure hook,
+which ends in NOTREACHED(). In a release build that is an int3, so Windows
+reports APPCRASH with exception code 0x80000003, an offset, and nothing else --
+no module name, no function name. It took a minidump and a PDB to learn which
+of 48 delay-loaded DLLs was involved.
+
+Resolved with GetProcAddress instead, through two wrappers in
+application_info_win.cc, returning E_NOTIMPL where the export is absent.
+Nothing downstream needed restructuring: E_NOTIMPL is a failure, and failure is
+what Windows already returns from Get for a process that never called Set, so
+GetRawAppUserModelID() takes its existing branch and derives an ID from the
+application name. Set's callers never looked at the result.
+
+Deliberately not left to winwrap, which can also supply these. winwrap only
+links when use_winwrap is on, which is the --xp args and not an ordinary
+release build -- so a plain build would still have crashed on Vista. Resolving
+at the call site covers every configuration and costs a Win7-and-later user one
+cached GetProcAddress.
+
+shell32 is looked up with GetModuleHandleW first, since any process reaching
+this has it loaded, and LoadLibraryEx pinned to LOAD_LIBRARY_SEARCH_SYSTEM32 as
+a fallback so the name cannot be planted. That flag wants Windows 7, or Vista
+with KB2533623, which costs nothing: where the flag is missing, so are the two
+functions being looked for.
+
+diff --git a/electron/shell/common/application_info.h b/electron/shell/common/application_info.h
+--- a/electron/shell/common/application_info.h
++++ b/electron/shell/common/application_info.h
+@@ -32,6 +32,16 @@
+ bool IsAppRTL();
+ 
+ #if BUILDFLAG(IS_WIN)
++// shell32's Get/SetCurrentProcessExplicitAppUserModelID, resolved at runtime
++// because shell32 only exports them on Windows 7 and later. Calling the
++// imports directly is fatal on Vista and XP -- they are delay imports, so the
++// failure surfaces on first call, where Chromium's delay-load failure hook
++// ends in NOTREACHED(). Both report failure where the OS lacks them, which is
++// also what Windows returns when no ID has been set, so callers need no
++// separate path. See application_info_win.cc.
++HRESULT GetExplicitAppUserModelID(PWSTR* app_id);
++HRESULT SetExplicitAppUserModelID(PCWSTR app_id);
++
+ PCWSTR GetRawAppUserModelID();
+ base::win::ScopedHString GetAppUserModelID();
+ void SetAppUserModelID(const std::wstring& name);
+diff --git a/electron/shell/common/application_info_win.cc b/electron/shell/common/application_info_win.cc
+--- a/electron/shell/common/application_info_win.cc
++++ b/electron/shell/common/application_info_win.cc
+@@ -48,15 +48,54 @@
+   return base::UTF16ToUTF8(info->product_version());
+ }
+ 
++namespace {
++
++// shell32 is already loaded in any process that gets this far, so a module
++// handle is normally enough; LoadLibraryEx is the fallback, pinned to System32
++// so the name cannot be planted. That flag needs Windows 7 (or Vista with
++// KB2533623), which costs nothing here: on the versions where it is missing,
++// so are the functions being looked for.
++HMODULE Shell32() {
++  static const HMODULE module = []() -> HMODULE {
++    if (HMODULE loaded = ::GetModuleHandleW(L"shell32.dll"))
++      return loaded;
++    return ::LoadLibraryExW(L"shell32.dll", nullptr,
++                            LOAD_LIBRARY_SEARCH_SYSTEM32);
++  }();
++  return module;
++}
++
++}  // namespace
++
++HRESULT GetExplicitAppUserModelID(PWSTR* app_id) {
++  using GetFn = decltype(&::GetCurrentProcessExplicitAppUserModelID);
++  static const GetFn get_fn = reinterpret_cast<GetFn>(::GetProcAddress(
++      Shell32(), "GetCurrentProcessExplicitAppUserModelID"));
++
++  // Clear the out parameter whatever happens: callers below free it
++  // unconditionally, and Windows leaves it untouched when it fails.
++  if (app_id)
++    *app_id = nullptr;
++  return get_fn ? get_fn(app_id) : E_NOTIMPL;
++}
++
++HRESULT SetExplicitAppUserModelID(PCWSTR app_id) {
++  using SetFn = decltype(&::SetCurrentProcessExplicitAppUserModelID);
++  static const SetFn set_fn = reinterpret_cast<SetFn>(::GetProcAddress(
++      Shell32(), "SetCurrentProcessExplicitAppUserModelID"));
++
++  return set_fn ? set_fn(app_id) : E_NOTIMPL;
++}
++
+ void SetAppUserModelID(const std::wstring& name) {
+   GetAppUserModelId() = name;
+-  SetCurrentProcessExplicitAppUserModelID(GetAppUserModelId().c_str());
++  SetExplicitAppUserModelID(GetAppUserModelId().c_str());
+ }
+ 
+ PCWSTR GetRawAppUserModelID() {
+   if (GetAppUserModelId().empty()) {
+     PWSTR current_app_id;
+-    if (SUCCEEDED(GetCurrentProcessExplicitAppUserModelID(&current_app_id))) {
++    if (SUCCEEDED(GetExplicitAppUserModelID(&current_app_id))) {
+       GetAppUserModelId() = current_app_id;
+     } else {
+       std::string name = GetApplicationName();
+diff --git a/electron/shell/browser/electron_browser_client.cc b/electron/shell/browser/electron_browser_client.cc
+--- a/electron/shell/browser/electron_browser_client.cc
++++ b/electron/shell/browser/electron_browser_client.cc
+@@ -654,7 +654,7 @@
+ #if BUILDFLAG(IS_WIN)
+     // Append --app-user-model-id.
+     PWSTR current_app_id;
+-    if (SUCCEEDED(GetCurrentProcessExplicitAppUserModelID(&current_app_id))) {
++    if (SUCCEEDED(GetExplicitAppUserModelID(&current_app_id))) {
+       command_line->AppendSwitchNative(switches::kAppUserModelId,
+                                        current_app_id);
+       CoTaskMemFree(current_app_id);
+diff --git a/electron/shell/renderer/renderer_client_base.cc b/electron/shell/renderer/renderer_client_base.cc
+--- a/electron/shell/renderer/renderer_client_base.cc
++++ b/electron/shell/renderer/renderer_client_base.cc
+@@ -23,6 +23,7 @@
+ #include "printing/buildflags/buildflags.h"
+ #include "shell/browser/api/electron_api_protocol.h"
+ #include "shell/common/api/electron_api_native_image.h"
++#include "shell/common/application_info.h"
+ #include "shell/common/color_util.h"
+ #include "shell/common/gin_helper/dictionary.h"
+ #include "shell/common/js2c_bundle_ids.h"
+@@ -310,7 +311,7 @@
+   std::wstring app_id =
+       command_line->GetSwitchValueNative(switches::kAppUserModelId);
+   if (!app_id.empty()) {
+-    SetCurrentProcessExplicitAppUserModelID(app_id.c_str());
++    SetExplicitAppUserModelID(app_id.c_str());
+   }
+ #endif
+ }

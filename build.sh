@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.4"
+SCRIPTVER="1.3.5"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -919,6 +919,96 @@ check_source_version() {
   error_exit "src/electron is at $at, not v$ELECTRON_VERSION, so its DEPS and patch targets are the wrong ones and this build would still be labelled v$ELECTRON_VERSION. Put it on the tag (git -C $ELECTRON_PATH checkout --detach v$ELECTRON_VERSION) and re-run with --sync."
 }
 
+# Dependencies our patch series adds to DEPS, as <path under src/>. A DEPS
+# entry is only a directory on disk once something fetches it, and the sync
+# that built this checkout ran before the patch that declares it existed.
+PATCHED_DEPS=(third_party/winwrap)
+
+dep_url_from_deps() {
+  # The URL and ref for a dep, read out of Chromium's DEPS so they live in
+  # exactly one place: the patch that adds the entry. Printed as "<url> <ref>".
+  # Understands the two forms our entries use, a bare string or a dict with a
+  # 'url' key, each possibly built by concatenating string literals.
+  py - "$SRC_PATH/DEPS" "src/$1" <<'PY'
+import ast, re, sys
+
+deps_file, want = sys.argv[1], sys.argv[2]
+text = open(deps_file, encoding="utf-8").read()
+
+# The entry's value: everything after the key, up to the comma that ends it.
+m = re.search(r"^\s*'%s':\s*(\{.*?^\s*\}|[^\n]+?),\s*$" % re.escape(want),
+              text, re.S | re.M)
+if not m:
+    sys.exit("no DEPS entry for %s" % want)
+value = m.group(1)
+
+if value.lstrip().startswith("{"):
+    u = re.search(r"'url':\s*(.+?),\s*$", value, re.S | re.M)
+    if not u:
+        sys.exit("DEPS entry for %s has no url" % want)
+    value = u.group(1)
+
+# 'https://host/repo.git' + '@' + 'ref' -- literals and + only, so this folds
+# with ast rather than eval.
+try:
+    url = ast.literal_eval(compile(ast.Expression(ast.parse(value.strip(),
+                           mode="eval").body), "<deps>", "eval"))
+except Exception:
+    url = None
+if not isinstance(url, str):
+    parts = re.findall(r"'([^']*)'", value)
+    if not parts:
+        sys.exit("cannot read url for %s" % want)
+    url = "".join(parts)
+
+repo, _, ref = url.partition("@")
+print(repo, ref or "HEAD")
+PY
+}
+
+sync_patched_deps() {
+  # Fetch what the series added to DEPS, which the sync that built this
+  # checkout could not have known about.
+  #
+  # Deliberately not `gclient sync`. gclient has no way to act on one entry: it
+  # walks every dependency in the solution, and on an existing checkout that
+  # means re-fetching chromium/src. Measured here, it spent fifteen minutes
+  # inside chromium.googlesource.com without reaching a 40 KB repository, with
+  # --nohooks and --no-history both set. A dep this size does not justify that
+  # on every fresh setup, so clone it directly and leave gclient's bookkeeping
+  # to a real sync -- it recognises an existing checkout of the right remote.
+  #
+  # Only when the directory is missing. Once it exists, leave it alone: winwrap
+  # is ours and under active development, so that is a reasonable place to be
+  # editing, and re-fetching would put it back to whatever DEPS names and take
+  # the edits with it. Updates are then a git pull in the dependency itself.
+  local dep url ref target
+  for dep in "${PATCHED_DEPS[@]}"; do
+    target="$SRC_PATH/$dep"
+    [ -d "$target" ] && continue
+
+    read -r url ref < <(dep_url_from_deps "$dep") \
+      || error_exit "Could not read the $dep entry from $SRC_PATH/DEPS"
+    [ -n "$url" ] || error_exit "No URL for $dep in $SRC_PATH/DEPS"
+
+    create_dir "$(dirname "$target")"
+    # --depth 1 because nothing here wants the dependency's history; a build
+    # only needs its files. `--branch` takes a tag as well as a branch, so it
+    # covers both a moving ref and a pinned release tag. It cannot take a raw
+    # commit, so that falls back to fetching the one commit by hash.
+    if git clone --quiet --depth 1 --branch "$ref" "$url" "$target" 2>/dev/null; then
+      log "${GRE} Fetched %s at %s${c0}\n" "$dep" "$ref"
+    else
+      execute "Fetching $dep" "could not clone $url" \
+          git clone --quiet --no-checkout --depth 1 "$url" "$target"
+      execute "Checking out $dep at $ref" "no commit $ref in $url" \
+          git -C "$target" fetch --quiet --depth 1 origin "$ref"
+      execute "Checking out $dep" "could not check out $ref" \
+          git -C "$target" checkout --quiet FETCH_HEAD
+    fi
+  done
+}
+
 apply_patches() {
   [ -d "$ELECTRON_PATH" ] || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
 
@@ -935,6 +1025,8 @@ apply_patches() {
     printf '   %s\n' "${FAILED_PATCHES[@]}" | tee -a "$LOG_FILE"
     error_exit "Fix them, then re-run with --reset (the tree is partially patched now)."
   fi
+
+  sync_patched_deps
 
   # Record what we just applied so a later build doesn't redo the series.
   patches_digest > "$(patches_stamp)"
@@ -1436,6 +1528,10 @@ main() {
     else
       apply_patches
     fi
+    # Also outside apply_patches, which the stamp check above skips whenever the
+    # series is already applied -- and a dependency the series added can still
+    # be missing then, in a tree patched before the DEPS entry existed.
+    sync_patched_deps
   fi
   # Needs the checkout, so it can't go in setup_toolchain with the rest.
   if [ "$HOST_OS" = linux ]; then

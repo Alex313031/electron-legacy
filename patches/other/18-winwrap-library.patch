@@ -1,0 +1,104 @@
+Title: Add winwrap as a DEP and link it into every final binary
+Origin: electron-legacy (this repo)
+
+winwrap supplies Win32 functions that older Windows releases do not export, so
+a binary compiled against a current SDK still loads on them. A statically
+imported symbol the target OS does not have is fatal at load, before any
+process code runs, so it cannot be fixed at the call site -- which is the whole
+reason the library exists. Source and rationale now live in its own repository,
+https://github.com/Alex313031/winwrap; this patch is only the two things the
+Chromium tree has to know.
+
+It was carried as ~1000 lines of patch until now. Out of tree it can be worked
+on without regenerating a patch for every edit, and used by projects that are
+not this one -- which it is written to be, the GN build being one integration
+rather than the only one.
+
+The dep tracks main for now. Pin a revision before cutting a release that has
+to be reproducible from the patch series alone. github.com joins allowed_hosts
+because winwrap is the first dependency here not served from googlesource.
+
+Note the condition is checkout_win alone, not 'checkout_win and process_deps':
+process_deps is a variable of Electron's DEPS, and this entry is in Chromium's,
+where it is undefined.
+
+Linked in through //build/config:common_deps, which BUILD.gn itself calls out
+as a dependency of every executable and shared library. That is the right
+altitude: the redirect works by satisfying the __imp_<name> slot a dllimport
+call site loads through, and every final link resolves those independently, so
+putting it on one target would leave the rest importing kernel32. common_deps
+is the one place covering executables, shared libraries and loadable modules
+together.
+
+The dependency is guarded on is_win as well as use_winwrap. is_win follows
+current_os rather than target_os, so without it a cross build from Linux would
+hand winwrap to the host tools -- mksnapshot, protoc -- built through the same
+group. With use_winwrap off, the default, winwrap_lib is an empty group and
+none of this is reached.
+
+diff --git a/DEPS b/DEPS
+index 3f29da4cf6..deacbac9fa 100644
+--- a/DEPS
++++ b/DEPS
+@@ -584,6 +584,7 @@ allowed_hosts = [
+   'chrome-internal.googlesource.com',
+   'chromium.googlesource.com',
+   'dawn.googlesource.com',
++  'github.com',
+   'pdfium.googlesource.com',
+   'quiche.googlesource.com',
+   'skia.googlesource.com',
+@@ -1613,6 +1614,19 @@ deps = {
+       ],
+   },
+ 
++  # Win32 functions the oldest supported Windows does not export, so a binary
++  # built against a current SDK still loads there. Ours, kept out of tree so it
++  # can be worked on without regenerating a patch for every change, and so it
++  # can be consumed by projects other than this one.
++  #
++  # Tracks main rather than a pinned commit while the library is still being
++  # written; pin a revision here before cutting a release that has to be
++  # reproducible from the patch series alone.
++  'src/third_party/winwrap': {
++      'url': 'https://github.com/Alex313031/winwrap.git' + '@' + 'main',
++      'condition': 'checkout_win',
++  },
++
+   'src/third_party/wtl': {
+       'dep_type': 'cipd',
+       'condition': 'checkout_win',
+diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
+--- a/build/config/BUILD.gn
++++ b/build/config/BUILD.gn
+@@ -19,6 +19,7 @@
+ import("//build/config/rust.gni")
+ import("//build/config/sanitizers/sanitizers.gni")
+ import("//build/config/ui.gni")
++import("//third_party/winwrap/winwrap.gni")
+ if (is_android) {
+   import("//build/config/android/abi.gni")
+ }
+@@ -293,6 +294,22 @@
+     # crbug.com/402171653 for context.
+     public_deps += [ "//third_party/compiler-rt:atomic" ]
+   }
++
++  # Win32 functions the oldest supported Windows does not export. This has to
++  # reach every executable and shared library: the redirect works by satisfying
++  # the __imp_<name> slot a dllimport call site loads through, and every final
++  # link resolves those independently. common_deps is the single place covering
++  # all three link kinds, which is why it goes here and not on any one target.
++  #
++  # Inert unless use_winwrap is set -- winwrap_lib is an empty group then.
++  #
++  # is_win is current_os == "win", not target_os, so this is also what keeps
++  # host-toolchain targets out of it. A cross build from Linux compiles host
++  # tools (mksnapshot, protoc) through this same group, and they must not pull
++  # a library of Win32 implementations.
++  if (use_winwrap && is_win) {
++    public_deps += [ "//third_party/winwrap:winwrap_lib" ]
++  }
+ }
+ 
+ # Only the executable template in BUILDCONFIG.gn should reference this.
