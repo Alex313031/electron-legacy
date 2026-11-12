@@ -44,11 +44,17 @@ A normal release build targets Windows 7 and later. Vista and XP need `--xp`:
 It builds into its own `out/XP-<arch>`, so switching between an XP and a normal build stays
 incremental, and links `third_party/winwrap` to supply Win32 functions the older OS doesn't export.
 
-**Vista** works as of 44.11.1 and needs no extra flags. The `eglCreateContext ES 3.0 failed with
-error EGL_BAD_ATTRIBUTE` messages it logs are harmless — D3D9 only goes up to ES 2.0 and the
-automatic retry succeeds.
+**Vista and XP** both work as of 44.11.1. Launch with `--no-sandbox --disable-gpu` for now: the
+sandbox and the GPU process are the parts still being worked out, and everything else — windows,
+rendering, networking, Node — runs. See [TODO.md](../TODO.md).
 
-**XP** does not launch yet; 29 kernel32 functions are still missing. See [TODO.md](../TODO.md).
+The `eglCreateContext ES 3.0 failed with error EGL_BAD_ATTRIBUTE` messages logged on Vista are
+harmless — D3D9 only goes up to ES 2.0 and the automatic retry succeeds.
+
+On XP, ANGLE's D3D9 backend also needs `d3dcompiler_43.dll` from the
+[DirectX End-User Runtime](https://www.microsoft.com/en-us/download/details.aspx?id=35) — the
+`d3dcompiler_47.dll` shipped alongside Electron is itself built against Vista APIs and cannot load
+there.
 
 ### Cross-building from Linux
 
