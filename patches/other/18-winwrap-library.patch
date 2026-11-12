@@ -36,6 +36,18 @@ hand winwrap to the host tools -- mksnapshot, protoc -- built through the same
 group. With use_winwrap off, the default, winwrap_lib is an empty group and
 none of this is reached.
 
+Depending on common_deps turns out not to be sufficient on its own, which is
+the third hunk. Upstream's solink rules order the linker response file
+{{libs}} {{solibs}} {{inputs_newline}}, and link orders it
+{{inputs_newline}} {{libs}}. Import libraries are archives and the first one
+searched wins a symbol, so winwrap -- a link input -- beats kernel32.lib in an
+executable and loses to it in a DLL. The effect was that electron.exe bound to
+winwrap while every DLL in the same build kept its kernel32 import and failed
+to load, from one dependency that looked correctly placed. Giving DLLs the
+same order as executables is what makes the dependency mean the same thing in
+both, and inputs-before-libs is the conventional order anyway. Guarded on
+use_winwrap so an ordinary build links exactly as before.
+
 diff --git a/DEPS b/DEPS
 index 3f29da4cf6..deacbac9fa 100644
 --- a/DEPS
@@ -102,3 +114,59 @@ diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
  }
  
  # Only the executable template in BUILDCONFIG.gn should reference this.
+diff --git a/build/toolchain/win/toolchain.gni b/build/toolchain/win/toolchain.gni
+index 5a8e5195d5..3f9c1cbad6 100644
+--- a/build/toolchain/win/toolchain.gni
++++ b/build/toolchain/win/toolchain.gni
+@@ -11,9 +11,31 @@ import("//build/toolchain/cc_wrapper.gni")
+ import("//build/toolchain/rbe.gni")
+ import("//build/toolchain/toolchain.gni")
+ import("//build/toolchain/win/win_toolchain_data.gni")
++import("//third_party/winwrap/winwrap.gni")
+ 
+ assert(is_win, "Should only be running on Windows")
+ 
++# Order of the linker response file for DLLs.
++#
++# The upstream solink rules list {{libs}} before {{inputs_newline}}, while
++# link (executables) lists the inputs first. The asymmetry is invisible in an
++# ordinary build, but it decides whether an import library named as a link
++# input can take a symbol away from a system import library named in libs: an
++# archive wins by being searched first, so for a DLL kernel32.lib always wins
++# and for an executable it never does.
++#
++# winwrap depends on being searched first. It supplies __imp_ entries for
++# kernel32 functions that pre-Win7 Windows does not export, and it reaches a
++# target as an ordinary link input (//build/config:common_deps), so under the
++# upstream order every EXE binds to winwrap and every DLL silently keeps its
++# kernel32 import and fails to load. Putting the inputs first for DLLs too is
++# what makes the dependency mean the same thing in both.
++if (use_winwrap) {
++  _dll_rspfile_content = "{{inputs_newline}} {{libs}} {{solibs}} {{ldflags}} {{rlibs}}"
++} else {
++  _dll_rspfile_content = "{{libs}} {{solibs}} {{inputs_newline}} {{ldflags}} {{rlibs}}"
++}
++
+ # This tool will is used as a wrapper for various commands below.
+ _tool_wrapper_path =
+     rebase_path("//build/toolchain/win/tool_wrapper.py", root_build_dir)
+@@ -622,8 +644,7 @@ template("msvc_toolchain") {
+ 
+       # The use of inputs_newline is to work around a fixed per-line buffer
+       # size in the linker.
+-      rspfile_content =
+-          "{{libs}} {{solibs}} {{inputs_newline}} {{ldflags}} {{rlibs}}"
++      rspfile_content = _dll_rspfile_content
+     }
+ 
+     tool("solink_module") {
+@@ -646,8 +667,7 @@ template("msvc_toolchain") {
+ 
+       # The use of inputs_newline is to work around a fixed per-line buffer
+       # size in the linker.
+-      rspfile_content =
+-          "{{libs}} {{solibs}} {{inputs_newline}} {{ldflags}} {{rlibs}}"
++      rspfile_content = _dll_rspfile_content
+     }
+ 
+     tool("link") {
