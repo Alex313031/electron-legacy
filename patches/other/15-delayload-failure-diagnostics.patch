@@ -19,17 +19,29 @@ present but missing an export, which is what third_party/winwrap exists to fix.
 The two have nothing to do with each other, and the exception code alone cannot
 tell them apart.
 
-MessageBoxW rather than stderr because Electron on Windows usually has no
-console attached, and a message box cannot be missed. Wide, like everything
-else here; delayimp.h types szDll and szProcName as LPCSTR regardless of
+Recorded first, displayed second. OutputDebugString and a file in %TEMP%
+come first because they are kernel32 and cannot fail the way displaying can,
+and because a file is the only thing that survives a sandboxed child or a
+process that dies before a debugger attaches. A message box follows, since
+having to go and find the file is a poor trade when the failure can simply be
+put on screen.
+
+The box is deliberately not a plain MessageBoxW call. user32 is itself delay
+loaded in this binary, so calling it through the import thunk would have the
+hook re-enter the delay load machinery from inside its own failure path -- and
+a user32 export is the most likely thing to have failed in the first place.
+GetModuleHandleW plus GetProcAddress bypasses the thunk entirely and loads
+nothing, so an unmapped user32 means no box rather than a second failure.
+
+Wide throughout; delayimp.h types szDll and szProcName as LPCSTR regardless of
 UNICODE, so %hs embeds them without a manual conversion.
 
 DROP THIS PATCH BEFORE SHIPPING. It is a debugging aid for the XP/Vista port,
-not behaviour anyone wants in a release: it turns a silent crash into a modal
-dialog on a background thread.
+not behaviour anyone wants in a release: it writes a file and shows a dialog
+from a crash path.
 
 diff --git a/chrome/common/win/delay_load_failure_support.cc b/chrome/common/win/delay_load_failure_support.cc
-index bd9ef9a666..1cf7c36ba1 100644
+index bd9ef9a666..c0f41fef1c 100644
 --- a/chrome/common/win/delay_load_failure_support.cc
 +++ b/chrome/common/win/delay_load_failure_support.cc
 @@ -6,6 +6,9 @@
@@ -42,7 +54,7 @@ index bd9ef9a666..1cf7c36ba1 100644
  
  #include "base/check.h"
  #include "base/debug/alias.h"
-@@ -25,6 +28,44 @@ FARPROC WINAPI HandleDelayLoadFailureCommon(unsigned reason,
+@@ -25,6 +28,100 @@ FARPROC WINAPI HandleDelayLoadFailureCommon(unsigned reason,
    SCOPED_CRASH_KEY_STRING256("DelayLoad", "ModuleName", dll_name);
    SCOPED_CRASH_KEY_NUMBER("DelayLoad", "LastError", dll_info->dwLastError);
  
@@ -75,14 +87,70 @@ index bd9ef9a666..1cf7c36ba1 100644
 +  }
 +
 +  wchar_t message[512];
-+  _snwprintf_s(message, std::size(message), _TRUNCATE,
-+               L"reason=%u (3=dliFailLoadLib, 4=dliFailGetProc)\n"
-+               L"dll=%hs\n"
-+               L"proc=%s\n"
-+               L"dwLastError=%lu",
-+               reason, dll_info->szDll, proc, dll_info->dwLastError);
-+  ::MessageBoxW(nullptr, message, L"Delay load failure",
-+                MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
++  int length = _snwprintf_s(
++      message, std::size(message), _TRUNCATE,
++      L"winwrap delay load failure\r\n"
++      L"reason=%u (3=dliFailLoadLib, 4=dliFailGetProc)\r\n"
++      L"dll=%hs\r\n"
++      L"proc=%s\r\n"
++      L"dwLastError=%lu\r\n",
++      reason, dll_info->szDll, proc, dll_info->dwLastError);
++  if (length < 0) {
++    length = 0;
++  }
++
++  // Recorded before it is displayed, and recorded by means that cannot fail
++  // the way displaying it can. Both of these are kernel32, which is linked
++  // normally.
++  ::OutputDebugStringW(message);
++
++  // And a file, because a process that dies before a debugger is attached
++  // leaves nothing else behind. Truncating rather than appending: the first
++  // failure is fatal, so there is only ever one per run, and a fresh file is
++  // easier to trust than a growing one.
++  // Composed in one call rather than appended in place: indexing past a
++  // returned length is pointer arithmetic the unsafe-buffers plugin rejects,
++  // and GetTempPathW already guarantees the trailing separator.
++  wchar_t directory[MAX_PATH];
++  DWORD directory_length = ::GetTempPathW(MAX_PATH, directory);
++  if (directory_length != 0 && directory_length < MAX_PATH) {
++    wchar_t path[MAX_PATH];
++    _snwprintf_s(path, std::size(path), _TRUNCATE,
++                 L"%swinwrap-delayload.txt", directory);
++    HANDLE file =
++        ::CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
++                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++    if (file != INVALID_HANDLE_VALUE) {
++      DWORD written = 0;
++      // UTF-16 with a byte order mark, so Notepad on the target reads it.
++      const wchar_t bom = 0xFEFF;
++      ::WriteFile(file, &bom, sizeof(bom), &written, nullptr);
++      ::WriteFile(file, message,
++                  static_cast<DWORD>(length) * sizeof(wchar_t), &written,
++                  nullptr);
++      ::CloseHandle(file);
++    }
++  }
++
++  // Now that the failure is on disk regardless, put it on screen as well,
++  // which saves going to look for the file in the common case.
++  //
++  // Not a plain MessageBoxW call. user32 is itself delay loaded in this
++  // binary, so calling it through the import thunk would have this hook
++  // re-enter the delay load machinery from inside its own failure path -- and
++  // the most likely thing to have failed is a user32 export. Going through an
++  // already-loaded module handle bypasses the thunk completely:
++  // GetModuleHandleW never loads anything, so if user32 is not mapped yet
++  // there is simply no box, and the file above is still there.
++  if (HMODULE user32 = ::GetModuleHandleW(L"user32.dll")) {
++    using MessageBoxWFunction = int(WINAPI*)(HWND, LPCWSTR, LPCWSTR, UINT);
++    auto show = reinterpret_cast<MessageBoxWFunction>(
++        ::GetProcAddress(user32, "MessageBoxW"));
++    if (show) {
++      show(nullptr, message, L"Delay load failure",
++           MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
++    }
++  }
 +
    // Deterministically crash here. Returning 0 from the hook would likely result
    // in the process crashing anyway, but in a form that might trigger undefined
