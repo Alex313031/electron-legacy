@@ -14,3 +14,4 @@
 14-widevine-loader.patch
 15-xp-vista-support.patch
 16-delayload-failure-diagnostics.patch
+17-angle-d3d9-fallback-by-default.patch
