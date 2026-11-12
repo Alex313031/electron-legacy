@@ -1,0 +1,89 @@
+Title: TEMPORARY: name the module in delay-load failure crashes
+Origin: electron-legacy (this repo)
+
+A delay-load failure on legacy Windows is diagnostically silent. The hook ends
+in NOTREACHED(), which in a release build is just base::ImmediateCrash() -- an
+int3 -- so Windows reports APPCRASH with exception code 0x80000003 and an
+offset, and nothing else. szDll is handed to DEBUG_ALIAS_FOR_CSTR and a crash
+key, both of which only pay off if a minidump reaches Crashpad; neither helps
+someone sitting in front of a Vista box.
+
+That cost us a whole diagnostic cycle: symbolising the WER offset identified
+HandleDelayLoadFailureCommon as the faulting function, which narrowed the
+problem to "some delay-loaded import", but the module name was not recoverable
+from the dump's stack, and the delay-load table has 48 candidate DLLs.
+
+So say it out loud before crashing. `reason` is the important half: dliFailLoadLib
+means the module is absent and needs a stub, while dliFailGetProc means it is
+present but missing an export, which is what third_party/winwrap exists to fix.
+The two have nothing to do with each other, and the exception code alone cannot
+tell them apart.
+
+MessageBoxW rather than stderr because Electron on Windows usually has no
+console attached, and a message box cannot be missed. Wide, like everything
+else here; delayimp.h types szDll and szProcName as LPCSTR regardless of
+UNICODE, so %hs embeds them without a manual conversion.
+
+DROP THIS PATCH BEFORE SHIPPING. It is a debugging aid for the XP/Vista port,
+not behaviour anyone wants in a release: it turns a silent crash into a modal
+dialog on a background thread.
+
+diff --git a/chrome/common/win/delay_load_failure_support.cc b/chrome/common/win/delay_load_failure_support.cc
+index bd9ef9a666..1cf7c36ba1 100644
+--- a/chrome/common/win/delay_load_failure_support.cc
++++ b/chrome/common/win/delay_load_failure_support.cc
+@@ -6,6 +6,9 @@
+ #include <windows.h>
+ 
+ #include <delayimp.h>
++#include <stdio.h>
++
++#include <iterator>
+ 
+ #include "base/check.h"
+ #include "base/debug/alias.h"
+@@ -25,6 +28,44 @@ FARPROC WINAPI HandleDelayLoadFailureCommon(unsigned reason,
+   SCOPED_CRASH_KEY_STRING256("DelayLoad", "ModuleName", dll_name);
+   SCOPED_CRASH_KEY_NUMBER("DelayLoad", "LastError", dll_info->dwLastError);
+ 
++  // TEMPORARY, for the XP/Vista port. In a release build NOTREACHED() below
++  // raises STATUS_BREAKPOINT without emitting anything readable, so WER reports
++  // a bare 0x80000003 and szDll survives only in a minidump. Say it out loud
++  // instead.
++  //
++  // `reason` splits the problem in two, and the halves need opposite fixes:
++  // dliFailLoadLib means the module is absent (a stub DLL is needed), while
++  // dliFailGetProc means it is present but missing an export (winwrap's job).
++  // szProcName is a union with dwOrdinal and is only meaningful for the latter.
++  //
++  // delayimp.h types szDll and szProcName as LPCSTR, so they are narrow
++  // regardless of UNICODE; %hs embeds them in a wide string without a manual
++  // conversion.
++  //
++  // Every branch formats rather than copies: wcscpy_s's template overload
++  // trips -Wunsafe-buffer-usage-in-libc-call, which _snwprintf_s with an
++  // explicit count does not.
++  wchar_t proc[128];
++  if (reason != dliFailGetProc) {
++    _snwprintf_s(proc, std::size(proc), _TRUNCATE, L"%s", L"(n/a)");
++  } else if (dll_info->dlp.fImportByName) {
++    _snwprintf_s(proc, std::size(proc), _TRUNCATE, L"%hs",
++                 dll_info->dlp.szProcName);
++  } else {
++    _snwprintf_s(proc, std::size(proc), _TRUNCATE, L"ordinal #%u",
++                 dll_info->dlp.dwOrdinal);
++  }
++
++  wchar_t message[512];
++  _snwprintf_s(message, std::size(message), _TRUNCATE,
++               L"reason=%u (3=dliFailLoadLib, 4=dliFailGetProc)\n"
++               L"dll=%hs\n"
++               L"proc=%s\n"
++               L"dwLastError=%lu",
++               reason, dll_info->szDll, proc, dll_info->dwLastError);
++  ::MessageBoxW(nullptr, message, L"Delay load failure",
++                MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
++
+   // Deterministically crash here. Returning 0 from the hook would likely result
+   // in the process crashing anyway, but in a form that might trigger undefined
+   // behavior or be hard to diagnose. See https://crbug.com/40223662.

@@ -1,11 +1,12 @@
-Title: Add third_party/winwrap, a Win32 compatibility layer for XP
+Title: Add third_party/winwrap, a Win32 compatibility layer for legacy Windows
 Origin: electron-legacy (this repo)
 
-Groundwork for Windows XP. Scanning the shipped x64 electron.exe against real
-system DLLs gives the size of the problem: 2 symbols missing on Vista SP2, but
-28 on XP x64 and 38 on XP SP3 x86 (tools/check_win_imports.py reproduces this).
-A statically imported symbol the target OS does not export is fatal at load,
-before any process code runs, so none of it can be fixed at a call site.
+Groundwork for Windows XP, and as of the AppUserModelID pair below, a fix for a
+real Vista crash. Scanning the shipped x64 electron.exe against real system DLLs
+gives the size of the problem: 2 symbols missing on Vista SP2, but 28 on XP x64
+and 38 on XP SP3 x86 (tools/check_win_imports.py reproduces this). A statically
+imported symbol the target OS does not export is fatal at load, before any
+process code runs, so none of it can be fixed at a call site.
 
 Vista's two are the TryAcquireSRWLock variants, which nothing in Node or
 Electron calls; patches/node/06-node-xp-vista-support.patch handles those by teaching libuv they can be
@@ -39,13 +40,51 @@ a CRITICAL_SECTION where it asked for an SRWLOCK, for nothing.
 
 Verified against the packaged toolchain and the real system DLLs, both
 architectures: every translation unit compiles against the 10.0.26100.0 SDK;
-redirects.cc emits exactly the nine expected symbols with correct x86 byte
-counts (@0, @4, @16); a consumer calling all nine through the SDK headers,
+redirects.cc emits exactly the nine synchronisation symbols with correct x86
+byte counts (@0, @4, @16); a consumer calling all nine through the SDK headers,
 linked against the real kernel32.Lib, comes out with none of them in its import
 table; and that binary scans clean against XP SP3 x86 and XP x64 exports --
-winwrap's own imports are all XP-era primitives. The shared mode links on both
-architectures too, exporting all ten names with a correctly decorated import
-library (__imp__GetTickCount64@0 and friends on x86).
+winwrap's own imports are all XP-era primitives.
+
+The shared mode is now confirmed on a real 32-bit build rather than in a
+harness: out/XP-x86/winwrap.dll exports all ten undecorated names, and
+electron.exe from the same build imports winwrap.dll with no remaining
+kernel32 import for GetTickCount64, InitOnceExecuteOnce or InitializeSRWLock.
+Undecorated alias targets in winwrap.def are therefore fine on x86 -- lld-link
+matches winwrap_GetTickCount64 against the decorated _winwrap_GetTickCount64@0
+that __stdcall emits -- and the warning that file used to carry about 32-bit
+shared builds was wrong.
+
+The shell32 AppUserModelID pair is the one part of this that is not about XP,
+and it is reached differently from everything else here. shell32 is
+delay-loaded, so a missing export is not fatal at load; it surfaces on the
+first call, where Chromium's delay-load failure hook ends in NOTREACHED().
+Windows then reports APPCRASH with exception code 0x80000003 and an offset and
+nothing else, which is how a one-line gap cost a full diagnostic cycle. The
+mechanism is unchanged -- satisfying __imp_<name> here means shell32.lib is
+never consulted for that symbol and no delay thunk is generated for it -- and
+the library ordering works out for a different reason than it does for
+kernel32: winwrap.dll.lib is a link *input*, which the GN toolchain places
+ahead of ${libs} in the response file, and shell32.lib is in ${libs}. That is
+the same reason the kernel32 redirect holds even though kernel32.lib is itself
+named explicitly in that list, contrary to what the /DEFAULTLIB reasoning above
+assumes; both paths work, but the input-ordering one is what is actually doing
+the work.
+
+Vista has neither taskbar grouping nor jump lists, so there is no AppUserModelID
+concept to implement: Set accepts an ID and does nothing with it, and Get
+reports that no ID has been set, which is what Windows itself returns for a
+process that never called Set. Electron's GetRawAppUserModelID() already
+handles that result and derives an ID from the application name instead.
+
+Both still answer like the real functions where the answer is observable. Set
+rejects a null ID with E_INVALIDARG rather than claiming success for a call
+that could not have meant anything; it does not enforce the documented length
+and no-spaces rules, because Windows rejecting those means a caller already
+copes, and accepting one here keeps the shim from disagreeing in the direction
+nobody tests. Get clears its out parameter, because that same Electron function
+declares an uninitialised PWSTR and passes it to CoTaskMemFree()
+unconditionally.
 
 winwrap_internal_config drops _WIN32_WINNT to 0x0501 for winwrap's own sources,
 via cflags with a -U first because Chromium sets it globally. That is load
@@ -53,7 +92,9 @@ bearing rather than cosmetic: it hides the post-XP declarations from this
 library while leaving consumers at 0x0A00, so a Vista-or-later call added here
 fails to compile instead of becoming a runtime surprise on XP. winwrap still
 builds because it needs only the types, which live ungated in winnt.h, and
-never calls the functions it stands in for.
+never calls the functions it stands in for. It is also why app_user_model_id.cc
+declares the two shell32 signatures in winwrap.h rather than including
+shobjidl.h, which hides them below NTDDI_WIN7.
 
 Everything here is 7-bit ASCII, deliberately. rc.py passes /utf-8 to the
 resource compiler only when the .rc itself opens with a UTF-16LE BOM; without
@@ -78,13 +119,13 @@ use_winwrap: is_win follows current_os, not target_os, so without it a cross
 build from Linux would hand winwrap to the host tools built through the same
 group.
 
-Scope, stated plainly: this lands the mechanism and three implementations
-(SRWLOCK on CRITICAL_SECTION, GetTickCount64, InitOnceExecuteOnce). The other
-~29 XP symbols are not written yet, condition variables being the notable gap.
-Condition variables need a lazily allocated wait queue behind a single pointer,
-the same shape srwlock.cc uses for its CRITICAL_SECTION. With use_winwrap off
--- the default -- none of this is reached, so the patch is inert by
-construction.
+Scope, stated plainly: this lands the mechanism and four implementations
+(SRWLOCK on CRITICAL_SECTION, GetTickCount64, InitOnceExecuteOnce, and the
+AppUserModelID pair). The other ~29 XP symbols are not written yet, condition
+variables being the notable gap. Condition variables need a lazily allocated
+wait queue behind a single pointer, the same shape srwlock.cc uses for its
+CRITICAL_SECTION. With use_winwrap off -- the default -- none of this is
+reached, so the patch is inert by construction.
 
 One thing this cannot do, recorded in redirects.cc so it is not rediscovered
 the hard way: the SRWLOCK redirects must not be used on Vista. Vista exports
@@ -128,9 +169,10 @@ diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
  # Only the executable template in BUILDCONFIG.gn should reference this.
 diff --git a/third_party/winwrap/BUILD.gn b/third_party/winwrap/BUILD.gn
 new file mode 100644
+index 0000000000..23c74925c2
 --- /dev/null
 +++ b/third_party/winwrap/BUILD.gn
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,91 @@
 +# Copyright 2026 Alex313031. All rights reserved.
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -143,6 +185,7 @@ new file mode 100644
 +# steered into them (see redirects.cc for the static mode, winwrap.def for the
 +# shared one).
 +_winwrap_sources = [
++  "app_user_model_id.cc",
 +  "init_once.cc",
 +  "srwlock.cc",
 +  "tick_count.cc",
@@ -223,6 +266,7 @@ new file mode 100644
 +}
 diff --git a/third_party/winwrap/LICENSE b/third_party/winwrap/LICENSE
 new file mode 100644
+index 0000000000..4250873ac5
 --- /dev/null
 +++ b/third_party/winwrap/LICENSE
 @@ -0,0 +1,29 @@
@@ -257,6 +301,7 @@ new file mode 100644
 +OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 diff --git a/third_party/winwrap/README.chromium b/third_party/winwrap/README.chromium
 new file mode 100644
+index 0000000000..3fddce5f41
 --- /dev/null
 +++ b/third_party/winwrap/README.chromium
 @@ -0,0 +1,27 @@
@@ -287,8 +332,77 @@ new file mode 100644
 +Written for this project; "third party" only in the sense of living outside the
 +Chromium and Electron trees, so it can be split into its own repository and
 +consumed as a DEP later without moving anything.
+diff --git a/third_party/winwrap/app_user_model_id.cc b/third_party/winwrap/app_user_model_id.cc
+new file mode 100644
+index 0000000000..1281dae7c0
+--- /dev/null
++++ b/third_party/winwrap/app_user_model_id.cc
+@@ -0,0 +1,62 @@
++// Copyright 2026 Alex313031. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Explicit Application User Model IDs. shell32, Windows 7 and later.
++//
++// An AppUserModelID identifies a process to the Windows 7 taskbar so that its
++// windows group under a single button and a jump list can be attached to them.
++// Vista's taskbar has neither grouping nor jump lists, so there is no state to
++// keep and nothing to report. These are not partial implementations; they are
++// the whole of the concept as it exists before Windows 7.
++//
++// Unlike the rest of winwrap, these two are *delay*-imported, so an absent
++// export is not fatal at load. It surfaces on the first call, where Chromium's
++// delay-load failure hook ends in NOTREACHED() -- an int3, reported by Windows
++// as exception code 0x80000003 and nothing else. The redirect in redirects.cc
++// keeps the call from ever reaching shell32, and it works for a delay import
++// for the same reason it works for a static one: the reference is satisfied
++// here, so shell32.lib's member is never extracted and no delay thunk is
++// generated for it. winwrap.dll.lib is a link input, which the toolchain lists
++// ahead of `libs`, so it is reached before the explicit shell32.lib.
++
++#include "winwrap.h"
++
++extern "C" {
++
++HRESULT WINAPI winwrap_SetCurrentProcessExplicitAppUserModelID(PCWSTR AppID) {
++  // Reject a null ID the way the real function does, rather than reporting
++  // success for a call that could not have meant anything. There is no ID to
++  // store here, so the argument is otherwise unused -- but a shim that answers
++  // S_OK to everything teaches a caller that its input was accepted, and the
++  // first place that matters is a caller being ported to this platform.
++  if (!AppID) {
++    return E_INVALIDARG;
++  }
++
++  // The documented constraints on a valid ID -- at most 128 characters, no
++  // spaces -- are deliberately not enforced. Windows rejects those, so a
++  // caller that trips them is already handling a failure on Win7 and later,
++  // and accepting one here costs nothing because nothing is kept. Enforcing
++  // them would only add a way for this to disagree with the real function in
++  // the opposite, harder-to-notice direction.
++  return S_OK;
++}
++
++HRESULT WINAPI winwrap_GetCurrentProcessExplicitAppUserModelID(PWSTR* AppID) {
++  // E_FAIL is what Windows itself returns for a process that never called Set,
++  // so every caller already handles it -- Electron's GetRawAppUserModelID()
++  // takes that branch and derives an ID from the application name instead
++  // (electron/shell/common/application_info_win.cc).
++  //
++  // Clear the out parameter regardless of what the caller passed in. That same
++  // Electron function declares an uninitialised PWSTR and hands it to
++  // CoTaskMemFree() unconditionally, after the branch where this call failed,
++  // which is only safe if the pointer is null.
++  if (AppID) {
++    *AppID = nullptr;
++  }
++  return E_FAIL;
++}
++
++}  // extern "C"
 diff --git a/third_party/winwrap/dll.cc b/third_party/winwrap/dll.cc
 new file mode 100644
+index 0000000000..62060cf08f
 --- /dev/null
 +++ b/third_party/winwrap/dll.cc
 @@ -0,0 +1,88 @@
@@ -382,6 +496,7 @@ new file mode 100644
 +}  // extern "C"
 diff --git a/third_party/winwrap/init_once.cc b/third_party/winwrap/init_once.cc
 new file mode 100644
+index 0000000000..87f2f53e46
 --- /dev/null
 +++ b/third_party/winwrap/init_once.cc
 @@ -0,0 +1,98 @@
@@ -485,9 +600,10 @@ new file mode 100644
 +}
 diff --git a/third_party/winwrap/redirects.cc b/third_party/winwrap/redirects.cc
 new file mode 100644
+index 0000000000..4f79c1850c
 --- /dev/null
 +++ b/third_party/winwrap/redirects.cc
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,77 @@
 +// Copyright 2026 Alex313031. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -558,8 +674,16 @@ new file mode 100644
 +// --- Missing on XP and Vista alike -----------------------------------------
 +WINWRAP_REDIRECT(TryAcquireSRWLockExclusive, 4);
 +WINWRAP_REDIRECT(TryAcquireSRWLockShared, 4);
++
++// shell32 rather than kernel32, and delay-imported rather than statically
++// imported, which changes when the failure appears but not how it is fixed:
++// the reference is satisfied here, so shell32.lib is never consulted for it
++// and no delay thunk is generated. See app_user_model_id.cc.
++WINWRAP_REDIRECT(SetCurrentProcessExplicitAppUserModelID, 4);
++WINWRAP_REDIRECT(GetCurrentProcessExplicitAppUserModelID, 4);
 diff --git a/third_party/winwrap/srwlock.cc b/third_party/winwrap/srwlock.cc
 new file mode 100644
+index 0000000000..9f9379ffb7
 --- /dev/null
 +++ b/third_party/winwrap/srwlock.cc
 @@ -0,0 +1,115 @@
@@ -680,6 +804,7 @@ new file mode 100644
 +}  // extern "C"
 diff --git a/third_party/winwrap/tick_count.cc b/third_party/winwrap/tick_count.cc
 new file mode 100644
+index 0000000000..77fb8d31b9
 --- /dev/null
 +++ b/third_party/winwrap/tick_count.cc
 @@ -0,0 +1,50 @@
@@ -735,17 +860,20 @@ new file mode 100644
 +}
 diff --git a/third_party/winwrap/winwrap.def b/third_party/winwrap/winwrap.def
 new file mode 100644
+index 0000000000..41187f939f
 --- /dev/null
 +++ b/third_party/winwrap/winwrap.def
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,24 @@
 +; Shared-library mode: export the public Win32 names, aliased onto the
 +; winwrap_ implementations, so the generated import library provides
 +; __imp_<name> and the linker binds there instead of kernel32.
 +;
-+; NOTE: verified for x64 only. On x86 the alias target needs the decorated
-+; symbol (_winwrap_GetTickCount64@0 and so on), so this file is not yet
-+; correct for 32-bit shared builds. The static mode -- the default -- handles
-+; both architectures and is the tested path; see redirects.cc.
++; Undecorated alias targets work on both architectures: lld-link matches
++; winwrap_GetTickCount64 against the decorated _winwrap_GetTickCount64@0 that
++; __stdcall actually emits. Confirmed on x86 -- the 32-bit winwrap.dll exports
++; all ten names below, and electron.exe binds GetTickCount64,
++; InitOnceExecuteOnce and the SRWLOCK family to winwrap.dll with no remaining
++; kernel32 import for any of them.
 +LIBRARY winwrap
 +EXPORTS
 +    DllGetVersion
@@ -758,8 +886,11 @@ new file mode 100644
 +    ReleaseSRWLockShared = winwrap_ReleaseSRWLockShared
 +    TryAcquireSRWLockExclusive = winwrap_TryAcquireSRWLockExclusive
 +    TryAcquireSRWLockShared = winwrap_TryAcquireSRWLockShared
++    SetCurrentProcessExplicitAppUserModelID = winwrap_SetCurrentProcessExplicitAppUserModelID
++    GetCurrentProcessExplicitAppUserModelID = winwrap_GetCurrentProcessExplicitAppUserModelID
 diff --git a/third_party/winwrap/winwrap.gni b/third_party/winwrap/winwrap.gni
 new file mode 100644
+index 0000000000..02127baa8e
 --- /dev/null
 +++ b/third_party/winwrap/winwrap.gni
 @@ -0,0 +1,25 @@
@@ -790,9 +921,10 @@ new file mode 100644
 +}
 diff --git a/third_party/winwrap/winwrap.h b/third_party/winwrap/winwrap.h
 new file mode 100644
+index 0000000000..e44aaf47d5
 --- /dev/null
 +++ b/third_party/winwrap/winwrap.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,62 @@
 +// Copyright 2026 Alex313031. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -841,11 +973,23 @@ new file mode 100644
 +                                        PVOID Parameter,
 +                                        LPVOID* Context);
 +
++// --- Explicit Application User Model IDs -----------------------------------
++// shell32, Windows 7+, and the one part of winwrap's surface that is reached
++// through a delay import rather than a static one -- so the symptom is a crash
++// on first call rather than a failure to load. Electron calls both
++// unconditionally from shell/common/application_info_win.cc.
++//
++// These are declared here rather than taken from shobjidl.h because winwrap's
++// own sources compile at _WIN32_WINNT=0x0501, where the SDK hides them.
++HRESULT WINAPI winwrap_SetCurrentProcessExplicitAppUserModelID(PCWSTR AppID);
++HRESULT WINAPI winwrap_GetCurrentProcessExplicitAppUserModelID(PWSTR* AppID);
++
 +}  // extern "C"
 +
 +#endif  // WINWRAP_WINWRAP_H_
 diff --git a/third_party/winwrap/winwrap.rc b/third_party/winwrap/winwrap.rc
 new file mode 100644
+index 0000000000..565b548e58
 --- /dev/null
 +++ b/third_party/winwrap/winwrap.rc
 @@ -0,0 +1,90 @@
@@ -941,6 +1085,7 @@ new file mode 100644
 +END
 diff --git a/third_party/winwrap/winwrap_version.h b/third_party/winwrap/winwrap_version.h
 new file mode 100644
+index 0000000000..135c909765
 --- /dev/null
 +++ b/third_party/winwrap/winwrap_version.h
 @@ -0,0 +1,65 @@

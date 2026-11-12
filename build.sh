@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.3"
+SCRIPTVER="1.3.4"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -141,6 +141,7 @@ ARCH=""
 VERBOSE=0
 JOBS=""
 IS_DEBUG=false
+IS_XP=false
 DO_DEPS=false
 DO_PACKAGE=false
 DO_NPM=false
@@ -219,6 +220,12 @@ Options:
   --gn-args "<args>"          Extra GN args, e.g. --gn-args 'symbol_level=0'. Repeatable.
   --clean                     Removes build artifacts from out dir (only <arch>'s, if given).
   --debug                     Make an unoptimized, full symbol debug build.
+  --xp                        Build for Windows XP/Vista: uses
+                              assets/args/xp_<arch>.gn instead of release_<arch>.gn,
+                              which turns on winwrap (see third_party/winwrap).
+                              Its own out dir, out/XP-<arch>, so switching
+                              between an XP and a normal build stays
+                              incremental instead of relinking everything.
 
 Environment:
   ROOT_PATH          Where .gclient, src/, dist/ and build.log go
@@ -409,6 +416,7 @@ parse_args() {
         EXTRA_GN_ARGS+=("$2"); shift ;;
       --clean) DO_CLEAN=true ;;
       --debug) IS_DEBUG=true ;;
+      --xp) IS_XP=true ;;
       *) arg_error "Unknown option '$1'" ;;
     esac
     shift
@@ -434,6 +442,13 @@ parse_args() {
   # -d and --sync both reset the checkout on their way through, so --reset
   # alongside them is asking for the same thing twice; say so rather than
   # silently doing nothing. --build-only is the opposite instruction.
+  # --xp selects a different args file and a different out dir, so it cannot
+  # also be the debug config: xp_<arch>.gn is the whole configuration, and
+  # there is no xp-debug args file to fall back to.
+  if [ "$IS_XP" = true ] && [ "$IS_DEBUG" = true ]; then
+    arg_error "--xp and --debug select different args files; pick one"
+  fi
+
   if [ "$DO_RESET" = true ]; then
     if [ "$ONLY_DOWNLOAD" = true ] || [ "$DO_SYNC" = true ]; then
       arg_error "--reset is redundant with -d and --sync, which already reset the checkout"
@@ -930,6 +945,7 @@ out_dir() {
   # between them stays incremental. (SIMD levels will add a suffix here.)
   local config=Release
   [ "$IS_DEBUG" = true ] && config=Debug
+  [ "$IS_XP" = true ] && config=XP
   printf 'out/%s-%s\n' "$config" "$ARCH"
 }
 
@@ -963,6 +979,7 @@ gen_out() {
   # files from outside src/. Lines the file doesn't set itself are appended.
   local config=release
   [ "$IS_DEBUG" = true ] && config=debug
+  [ "$IS_XP" = true ] && config=xp
   local name="${config}_${ARCH}.gn"
   local file="$ARGS_PATH/$name"
   [ -f "$file" ] || error_exit "No GN args file for this build: $file"
@@ -1187,6 +1204,7 @@ build_electron() {
   # Build it!
   local config=Release
   [ "$IS_DEBUG" = true ] && config=Debug
+  [ "$IS_XP" = true ] && config=XP
   log "${CYA} Building Electron (%s) for %s using %s jobs${c0}\n" "$config" "$ARCH" "$JOBS"
   local targets=(electron)
   if [ "$DO_PACKAGE" = true ]; then

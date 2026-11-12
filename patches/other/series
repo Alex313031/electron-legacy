@@ -13,3 +13,4 @@
 13-ac3-eac3-mpeg2-software-decoding.patch
 14-widevine-loader.patch
 15-xp-vista-support.patch
+16-delayload-failure-diagnostics.patch
