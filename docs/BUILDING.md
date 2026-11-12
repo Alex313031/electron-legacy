@@ -33,6 +33,23 @@ Run it after `--package`, not before, or those checksums describe binaries that 
 
 See `./build.sh --help` for all options.
 
+### Windows Vista and XP
+
+A normal release build targets Windows 7 and later. Vista and XP need `--xp`:
+
+```bash
+./build.sh x86 --xp          # or x64
+```
+
+It builds into its own `out/XP-<arch>`, so switching between an XP and a normal build stays
+incremental, and links `third_party/winwrap` to supply Win32 functions the older OS doesn't export.
+
+**Vista** works as of 44.11.1 and needs no extra flags. The `eglCreateContext ES 3.0 failed with
+error EGL_BAD_ATTRIBUTE` messages it logs are harmless — D3D9 only goes up to ES 2.0 and the
+automatic retry succeeds.
+
+**XP** does not launch yet; 29 kernel32 functions are still missing. See [TODO.md](../TODO.md).
+
 ### Cross-building from Linux
 
 Experimental, but it is how the releases are made. A Linux host has no Visual Studio to find, so

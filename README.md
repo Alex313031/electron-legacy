@@ -1,7 +1,12 @@
 # <img src="assets/electron-logo.svg" width="38"> Electron for Legacy Windows <img src="assets/compatible-with-windows-7.png" width="38"/>
 
 This is a set of build scripts and patches to produce builds of up-to-date [Electron](https://electronjs.org/) supporting legacy
-versions of Windows (Currently 7/8/8.1, XP/Vista support planned), with additional enhancements listed below.
+versions of Windows (currently 7/8/8.1 and Vista, with XP in progress), with additional enhancements listed below.
+
+![Electron 44.11.1 running on Windows Vista SP2](./assets/vista_screenshot.png)
+
+*Electron 44.11.1 — Chromium 152, Node 24.22.2 — on Windows Vista SP2.
+See [Windows Vista and XP](./docs/BUILDING.md#windows-vista-and-xp).*
 
 ## Synopsis
 
@@ -12,7 +17,8 @@ Existing Electron forks for Windows 7 were incomplete and hard to use, in additi
  - The [pre-Chrome Refresh 2023 UI](https://github.com/Alex313031/thorium/blob/main/docs/TH24.md#screenshots) back (which affects Electron's UI too): the current menu UI is ugly for native apps that Electron apps are supposed to be.
  - Compiler optimizations: the optimization and SIMD flags from [Thorium](https://github.com/Alex313031/thorium), ported in `patches/other/02-optimization-and-SIMD-args.patch`.
  - More codecs: [HEVC](https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding), [AC-3 and E-AC-3](https://en.wikipedia.org/wiki/Dolby_Digital#Dolby_AC-3), and MPEG-2 video, software decoded instead of left to the platform. See [Codecs](./docs/CODECS.md).
- - TODO: Windows XP/Vista support.
+ - Windows Vista support: working as of 44.11.1. Build it with `--xp`, see [Building](./docs/BUILDING.md#windows-vista-and-xp).
+ - TODO: Windows XP support — see [TODO.md](./TODO.md).
 
 ## Download
 Release artifacts are served at [Releases](https://github.com/Alex313031/electron-legacy/releases).
