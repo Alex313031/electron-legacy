@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.5"
+SCRIPTVER="1.3.6"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -142,6 +142,10 @@ VERBOSE=0
 JOBS=""
 IS_DEBUG=false
 IS_XP=false
+# Which assets/args/<os>/ directory supplies the GN args. Only "win" is
+# wired up: assets/args/linux/ exists but nothing selects it yet, because a
+# Linux target needs more than args (see TODO.md).
+TARGET_OS=win
 DO_DEPS=false
 DO_PACKAGE=false
 DO_NPM=false
@@ -221,7 +225,7 @@ Options:
   --clean                     Removes build artifacts from out dir (only <arch>'s, if given).
   --debug                     Make an unoptimized, full symbol debug build.
   --xp                        Build for Windows XP/Vista: uses
-                              assets/args/xp_<arch>.gn instead of release_<arch>.gn,
+                              assets/args/win/xp_vista/ instead of assets/args/win/,
                               which turns on winwrap (see third_party/winwrap).
                               Its own out dir, out/XP-<arch>, so switching
                               between an XP and a normal build stays
@@ -1037,7 +1041,15 @@ out_dir() {
   # between them stays incremental. (SIMD levels will add a suffix here.)
   local config=Release
   [ "$IS_DEBUG" = true ] && config=Debug
-  [ "$IS_XP" = true ] && config=XP
+  # XP qualifies the config rather than replacing it. It used to replace it,
+  # which was harmless while no XP debug args existed -- but now that they do,
+  # sharing one directory would mean each gn gen threw away the other build's
+  # incremental state. The release name stays "XP" so existing out/XP-<arch>
+  # trees are not orphaned by this.
+  if [ "$IS_XP" = true ]; then
+    config=XP
+    [ "$IS_DEBUG" = true ] && config=XPDebug
+  fi
   printf 'out/%s-%s\n' "$config" "$ARCH"
 }
 
@@ -1067,19 +1079,26 @@ version_arg() {
 
 gen_out() {
   # Set args and gn gen out based on supplied flags. The args come from
-  # assets/args/<config>_<arch>.gn, copied into args.gn because GN can't import
+  # assets/args/<os>/[xp_vista/]<config>_<arch>.gn, copied into args.gn because
+  # GN can't import
   # files from outside src/. Lines the file doesn't set itself are appended.
   local config=release
   [ "$IS_DEBUG" = true ] && config=debug
-  [ "$IS_XP" = true ] && config=xp
-  local name="${config}_${ARCH}.gn"
+  # XP and Vista are a *target*, not a build config: those args differ from an
+  # ordinary Windows build only by linking winwrap, and they have their own
+  # debug and release variants. So they live in a subdirectory and qualify the
+  # path, where the old flat layout had "xp" displace debug/release entirely
+  # and so could not express an XP debug build at all.
+  local dir="$TARGET_OS"
+  [ "$IS_XP" = true ] && dir="$dir/xp_vista"
+  local name="$dir/${config}_${ARCH}.gn"
   local file="$ARGS_PATH/$name"
   [ -f "$file" ] || error_exit "No GN args file for this build: $file"
 
   local args=()
   mapfile -t args < <(tr -d '\r' < "$file")
   args=("# From assets/args/$name" "${args[@]}" "" "# Added by $SCRIPTNAME")
-  grep -Eq '^[[:space:]]*target_os[[:space:]]*=' "$file" || args+=('target_os = "win"')
+  grep -Eq '^[[:space:]]*target_os[[:space:]]*=' "$file" || args+=("target_os = \"$TARGET_OS\"")
   grep -Eq '^[[:space:]]*override_electron_version[[:space:]]*=' "$file" || args+=("$(version_arg)")
   write_args "$(out_dir)" "${args[@]}"
 }
@@ -1282,7 +1301,7 @@ build_ffmpeg() {
   # ships. There is no win-x86.pgo.txt, so gn gen dies reading it:
   #   ERROR at //build/config/compiler/pgo/BUILD.gn: Could not read file.
   #   I resolved this to ".../electron/build/pgo_profiles/win-x86.pgo.txt"
-  # assets/args/release_x86.gn carries chrome_pgo_phase = 0 for exactly this,
+  # assets/args/win/release_x86.gn carries chrome_pgo_phase = 0 for exactly this,
   # but the ffmpeg out dir builds from ffmpeg.gn and never saw it. Keyed off
   # the state file rather than the arch, so x64 keeps its PGO and a win-x86
   # profile appearing later needs no change here.

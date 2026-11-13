@@ -1,0 +1,113 @@
+# GN args for a 64-bit release build. build.sh copies this into
+# src/out/XP-x64/args.gn and appends
+# override_electron_version, so don't set that here.
+#
+# Electron's own defaults, including ffmpeg_branding = "Chrome" and
+# proprietary_codecs = true. Anything below that repeats a value from all.gn is
+# stated deliberately, so changing it here is enough.
+import("//electron/build/args/all.gn")
+
+# Targeting win32
+target_os = "win"
+
+# Target CPU architecture, x64 means 64 bit
+target_cpu = "x64"
+
+# Official builds get the full optimization set (whole-program optimization,
+# no debug asserts) and are what upstream ships.
+is_official_build = true
+is_debug = false
+
+# DCHECKs are assertions, not error handling, and cost both size and speed.
+dcheck_always_on = false
+
+# One binary per component instead of a DLL each: slower to link, but it is
+# what ships, and component builds can't be packaged.
+is_component_build = false
+
+# ffmpeg stays its own DLL so consumers can replace it with the codec-free
+# build (build.sh's build_ffmpeg) without relinking Electron.
+is_component_ffmpeg = true
+
+# Disable Finch field trials
+disable_fieldtrial_testing_config = true
+
+# Media: ship the full codec set. Chromium's own builds are deliberately
+# narrower; these are the licensing-sensitive ones Electron enables.
+ffmpeg_branding = "Chrome"
+proprietary_codecs = true
+rtc_use_h264 = true
+rtc_use_h265 = true
+enable_ffmpeg_video_decoders = true
+
+# Enable HEVC
+enable_hevc_parser_and_hw_decoder = true
+platform_has_optional_hevc_decode_support = true
+# Linux and legacy Windows fails this
+platform_has_optional_hevc_encode_support = false
+
+# AC-3 and E-AC-3. Chromium defaults this to cast devices and tvOS only, and
+# everything about those codecs in media/ is behind the buildflag it sets:
+# without it mime_util never adds AC3/EAC3 to the mp4 and mkv codec sets (so
+# isTypeSupported says no and MediaCapabilities reports "Failed to parse audio
+# contentType"), CodecIDToAudioCodec cannot even name the codec, and the half
+# of patches/other/13 that lives in media/ compiles to nothing. The decoders
+# ffmpeg builds there are then unreachable. "platform" in the name means the
+# OS decodes it; with that patch applied, ffmpeg does.
+enable_platform_ac3_eac3_audio = true
+
+# Other codecs explicitly enabled/disabled
+enable_platform_ac4_audio = false
+enable_platform_dolby_vision = true
+enable_platform_encrypted_dolby_vision = true
+enable_platform_mpeg_h_audio = true
+enable_platform_dts_audio = true
+enable_hls_demuxer = true
+enable_mse_mpeg2ts_stream_parser = true
+
+# Build the Widevine CDM host, so encrypted media (Netflix, Spotify) works when
+# Electron is pointed at a CDM with --widevine-cdm-path; see
+# patches/other/14-widevine-loader.patch.
+enable_widevine = true
+
+# No debug info in the binaries. Symbols for crash reports come from the
+# separate PDB packaging step, not from here.
+symbol_level = 0
+enable_dsyms = false
+
+# Thin LTO: cross-module inlining with far less memory and link time than
+# full LTO, which is what makes it usable on a release build at all.
+use_thin_lto = true
+thin_lto_enable_optimizations = true
+
+# Inert unless visual_studio_path is also set: with that empty (our case) GN
+# runs build/vs_toolchain.py get_toolchain_dir and overwrites this with the
+# version the toolchain reports. Kept as a record of what these patches target.
+visual_studio_version = "2022"
+
+# Chromium's warning set moves faster than these patches do; a new warning
+# shouldn't fail a release build.
+treat_warnings_as_errors = false
+
+# Take the V8 context snapshot at build time: it makes creating a V8 context
+# (every renderer, every new window) measurably faster. Chromium leaves this
+# off for Windows cross builds because the snapshot generator links Blink, so
+# a Linux-hosted build compiles Blink a second time for the host toolchain --
+# slow, but worth it for a release. Already the default when building on
+# Windows, where this line is a no-op.
+use_v8_context_snapshot = true
+
+# Electron-collected PGO profile for V8's builtins, downloaded by a gclient
+# hook (checkout_pgo_profiles in .gclient). Reorders and optimizes the
+# builtins for Electron's own workload rather than Chrome's.
+v8_builtins_profiling_log_file =
+    "//electron/build/pgo_profiles/electron-v8-builtins.profile"
+
+# Full PGO optimizations
+chrome_pgo_phase = 2
+
+# Use winwrap library for Windows XP/Vista support
+use_winwrap = true
+
+# When true, use winwrap.dll, when false use the static lib.
+is_component_winwrap = true

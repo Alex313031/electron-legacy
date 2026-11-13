@@ -1,11 +1,14 @@
 # GN args for a 32-bit release build. build.sh copies this into
-# src/out/Release-x86/args.gn and appends target_os and
-# override_electron_version, so don't set those here.
+# src/out/Release-x86/args.gn and appends
+# override_electron_version, so don't set that here.
 #
 # Electron's own defaults, including ffmpeg_branding = "Chrome" and
 # proprietary_codecs = true. Anything below that repeats a value from all.gn is
 # stated deliberately, so changing it here is enough.
 import("//electron/build/args/all.gn")
+
+# Targeting win32
+target_os = "win"
 
 # Target CPU architecture, x86 means 32 bit
 target_cpu = "x86"
@@ -26,12 +29,17 @@ is_component_build = false
 # build (build.sh's build_ffmpeg) without relinking Electron.
 is_component_ffmpeg = true
 
+# Disable Finch field trials
+disable_fieldtrial_testing_config = true
+
 # Media: ship the full codec set. Chromium's own builds are deliberately
 # narrower; these are the licensing-sensitive ones Electron enables.
 ffmpeg_branding = "Chrome"
 proprietary_codecs = true
 rtc_use_h264 = true
+rtc_use_h265 = true
 enable_ffmpeg_video_decoders = true
+
 # Enable HEVC
 enable_hevc_parser_and_hw_decoder = true
 platform_has_optional_hevc_decode_support = true
@@ -54,6 +62,8 @@ enable_platform_dolby_vision = true
 enable_platform_encrypted_dolby_vision = true
 enable_platform_mpeg_h_audio = true
 enable_platform_dts_audio = true
+enable_hls_demuxer = true
+enable_mse_mpeg2ts_stream_parser = true
 
 # Build the Widevine CDM host, so encrypted media (Netflix, Spotify) works when
 # Electron is pointed at a CDM with --widevine-cdm-path; see

@@ -3,7 +3,7 @@
  - Restore 32 bit Linux support. [#51816](https://github.com/electron/electron/pull/51816) dropped
    `linux-armv7l` alongside `win32-ia32`; only the Windows half is restored so far
  - Collect a `win-x86` PGO profile. Electron only ever published 64 bit ones, so
-   `assets/args/release_x86.gn` sets `chrome_pgo_phase = 0` and 32 bit builds give up the PGO
+   `assets/args/win/release_x86.gn` sets `chrome_pgo_phase = 0` and 32 bit builds give up the PGO
    speedup. This is the only difference between the x86 and x64 GN args besides `target_cpu`
  - Delete `make_dist.sh`, a throwaway from the 44.10.2 release that pulls the upstream artifacts we
    don't build and merges `SHASUMS256.txt`

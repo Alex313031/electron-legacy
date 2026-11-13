@@ -40,7 +40,7 @@ decides whether it can be *decrypted* first. A DRM site needs both.
 
 Upstream Electron cannot load one at all — `enable_widevine` defaults to false outside Chrome
 branding, so the host side was never compiled. `patches/other/14` revives it and
-`assets/args/*.gn` sets `enable_widevine = true`.
+`assets/args/**/*.gn` set `enable_widevine = true`.
 
 ### Supplying a CDM
 

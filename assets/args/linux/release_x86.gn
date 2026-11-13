@@ -1,14 +1,17 @@
-# GN args for a 64-bit release build. build.sh copies this into
-# src/out/Release-x64/args.gn and appends target_os and
-# override_electron_version, so don't set those here.
+# GN args for a 32-bit release build. build.sh copies this into
+# src/out/Release-x86/args.gn and appends
+# override_electron_version, so don't set that here.
 #
 # Electron's own defaults, including ffmpeg_branding = "Chrome" and
 # proprietary_codecs = true. Anything below that repeats a value from all.gn is
 # stated deliberately, so changing it here is enough.
 import("//electron/build/args/all.gn")
 
-# Target CPU architecture, x64 means 64 bit
-target_cpu = "x64"
+# Targeting Linux
+target_os = "linux"
+
+# Target CPU architecture, x86 means 32 bit
+target_cpu = "x86"
 
 # Official builds get the full optimization set (whole-program optimization,
 # no debug asserts) and are what upstream ships.
@@ -26,11 +29,15 @@ is_component_build = false
 # build (build.sh's build_ffmpeg) without relinking Electron.
 is_component_ffmpeg = true
 
+# Disable Finch field trials
+disable_fieldtrial_testing_config = true
+
 # Media: ship the full codec set. Chromium's own builds are deliberately
 # narrower; these are the licensing-sensitive ones Electron enables.
 ffmpeg_branding = "Chrome"
 proprietary_codecs = true
 rtc_use_h264 = true
+rtc_use_h265 = true
 enable_ffmpeg_video_decoders = true
 
 # Enable HEVC
@@ -55,6 +62,8 @@ enable_platform_dolby_vision = true
 enable_platform_encrypted_dolby_vision = true
 enable_platform_mpeg_h_audio = true
 enable_platform_dts_audio = true
+enable_hls_demuxer = true
+enable_mse_mpeg2ts_stream_parser = true
 
 # Build the Widevine CDM host, so encrypted media (Netflix, Spotify) works when
 # Electron is pointed at a CDM with --widevine-cdm-path; see
@@ -71,34 +80,24 @@ enable_dsyms = false
 use_thin_lto = true
 thin_lto_enable_optimizations = true
 
-# Inert unless visual_studio_path is also set: with that empty (our case) GN
-# runs build/vs_toolchain.py get_toolchain_dir and overwrites this with the
-# version the toolchain reports. Kept as a record of what these patches target.
-visual_studio_version = "2022"
-
 # Chromium's warning set moves faster than these patches do; a new warning
 # shouldn't fail a release build.
 treat_warnings_as_errors = false
 
-# Take the V8 context snapshot at build time: it makes creating a V8 context
-# (every renderer, every new window) measurably faster. Chromium leaves this
-# off for Windows cross builds because the snapshot generator links Blink, so
-# a Linux-hosted build compiles Blink a second time for the host toolchain --
-# slow, but worth it for a release. Already the default when building on
-# Windows, where this line is a no-op.
-use_v8_context_snapshot = true
-
 # Electron-collected PGO profile for V8's builtins, downloaded by a gclient
 # hook (checkout_pgo_profiles in .gclient). Reorders and optimizes the
-# builtins for Electron's own workload rather than Chrome's.
+# builtins for Electron's own workload rather than Chrome's. Arch-independent,
+# unlike the Clang profiles below.
 v8_builtins_profiling_log_file =
     "//electron/build/pgo_profiles/electron-v8-builtins.profile"
 
-# Full PGO optimizations
-chrome_pgo_phase = 2
-
-# Use winwrap library for Windows XP/Vista support
-use_winwrap = true
-
-# When true, use winwrap.dll, when false use the static lib.
-is_component_winwrap = true
+# No Clang PGO for 32-bit. Electron resolves its profiles through state files
+# in //electron/build/pgo_profiles (see the IS_WIN branch in
+# //build/config/compiler/pgo/BUILD.gn, which still names "win-x86"), but it
+# only ever published profiles for the 64-bit platforms it ships -- there is no
+# win-x86.pgo.txt to read, so an official build otherwise dies in gn gen with
+#   ERROR Could not read file .../pgo_profiles/win-x86.pgo.txt
+# Collecting our own would mean running Electron's profile generation for x86;
+# until then 32-bit builds give up the ~10% PGO speedup. This arg is what that
+# costs, and it is the only difference from release_x64.gn beyond target_cpu.
+chrome_pgo_phase = 0

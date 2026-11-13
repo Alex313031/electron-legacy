@@ -1,11 +1,14 @@
 # GN args for a 64-bit debug build. build.sh copies this into
-# src/out/Debug-x64/args.gn and appends target_os and
-# override_electron_version, so don't set those here.
+# src/out/Debug-x64/args.gn and appends
+# override_electron_version, so don't set that here.
 #
 # Electron's own defaults, including ffmpeg_branding = "Chrome" and
 # proprietary_codecs = true. Anything below that repeats a value from all.gn is
 # stated deliberately, so changing it here is enough.
 import("//electron/build/args/all.gn")
+
+# Targeting Linux
+target_os = "linux"
 
 # Target CPU architecture, x64 means 64 bit
 target_cpu = "x64"
@@ -25,11 +28,16 @@ is_component_build = false
 # ffmpeg stays its own DLL, as in release, so the two builds stay comparable.
 is_component_ffmpeg = true
 
+# Disable Finch field trials
+disable_fieldtrial_testing_config = true
+
 # Same codec set as release, so media bugs reproduce here.
 ffmpeg_branding = "Chrome"
 proprietary_codecs = true
 rtc_use_h264 = true
+rtc_use_h265 = true
 enable_ffmpeg_video_decoders = true
+
 # Enable HEVC
 enable_hevc_parser_and_hw_decoder = true
 platform_has_optional_hevc_decode_support = true
@@ -52,6 +60,8 @@ enable_platform_dolby_vision = true
 enable_platform_encrypted_dolby_vision = true
 enable_platform_mpeg_h_audio = true
 enable_platform_dts_audio = true
+enable_hls_demuxer = true
+enable_mse_mpeg2ts_stream_parser = true
 
 # Build the Widevine CDM host, so encrypted media (Netflix, Spotify) works when
 # Electron is pointed at a CDM with --widevine-cdm-path; see
@@ -68,22 +78,9 @@ enable_dsyms = false
 use_thin_lto = false
 thin_lto_enable_optimizations = false
 
-# Inert unless visual_studio_path is also set: with that empty (our case) GN
-# runs build/vs_toolchain.py get_toolchain_dir and overwrites this with the
-# version the toolchain reports. Kept as a record of what these patches target.
-visual_studio_version = "2022"
-
 # Unlike release, fail on warnings: a debug build is where a new warning in
 # these patches should be caught.
 treat_warnings_as_errors = true
-
-# No use_v8_context_snapshot here, unlike release: it would mean building Blink
-# a second time for the host toolchain on a cross build, and the startup win
-# isn't worth that in a debug cycle. (Chromium's default already turns it off
-# for Windows cross builds; on a Windows host it stays on.)
-#
-# No v8_builtins_profiling_log_file either -- PGO data optimizes the build it
-# was collected for, which is not this one.
 
 # No PGO optimizations for debug builds
 chrome_pgo_phase = 0
