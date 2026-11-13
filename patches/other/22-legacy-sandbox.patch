@@ -85,10 +85,9 @@ on a 64-bit Vista: with the file beside electron.exe, every child launches
 sandboxed.
 
 diff --git a/sandbox/policy/switches.h b/sandbox/policy/switches.h
-index 869ddee323..efc6fc41b8 100644
 --- a/sandbox/policy/switches.h
 +++ b/sandbox/policy/switches.h
-@@ -31,6 +32,7 @@ SANDBOX_POLICY_EXPORT extern const char kNoZygoteSandbox[];
+@@ -32,6 +32,7 @@
  #if BUILDFLAG(IS_WIN)
  SANDBOX_POLICY_EXPORT extern const char kAllowThirdPartyModules[];
  SANDBOX_POLICY_EXPORT extern const char kAddXrAppContainerCaps[];
@@ -97,10 +96,9 @@ index 869ddee323..efc6fc41b8 100644
  #if BUILDFLAG(IS_MAC)
  SANDBOX_POLICY_EXPORT extern const char kEnableSandboxLogging[];
 diff --git a/sandbox/policy/switches.cc b/sandbox/policy/switches.cc
-index 29be2076af..f37486dcf7 100644
 --- a/sandbox/policy/switches.cc
 +++ b/sandbox/policy/switches.cc
-@@ -58,6 +64,14 @@ const char kAllowThirdPartyModules[] = "allow-third-party-modules";
+@@ -64,6 +64,14 @@
  // compositing.
  const char kAddXrAppContainerCaps[] = "add-xr-appcontainer-caps";
  
@@ -116,10 +114,9 @@ index 29be2076af..f37486dcf7 100644
  
  #if BUILDFLAG(IS_MAC)
 diff --git a/sandbox/policy/sandbox_type.cc b/sandbox/policy/sandbox_type.cc
-index 1b87649d48..d5d3e23175 100644
 --- a/sandbox/policy/sandbox_type.cc
 +++ b/sandbox/policy/sandbox_type.cc
-@@ -192,15 +192,34 @@ sandbox::mojom::Sandbox SandboxTypeFromCommandLine(
+@@ -192,15 +192,34 @@
    if (process_type.empty())
      return Sandbox::kNoSandbox;
  
@@ -157,10 +154,9 @@ index 1b87649d48..d5d3e23175 100644
      return Sandbox::kGpu;
    }
 diff --git a/sandbox/policy/win/sandbox_win.cc b/sandbox/policy/win/sandbox_win.cc
-index daeb9327d2..30b0a5bbf1 100644
 --- a/sandbox/policy/win/sandbox_win.cc
 +++ b/sandbox/policy/win/sandbox_win.cc
-@@ -675,6 +739,16 @@ bool IsUnsandboxedProcess(
+@@ -739,6 +739,16 @@
      return true;
    if (launcher_process_command_line.HasSwitch(switches::kNoSandbox))
      return true;
@@ -177,7 +173,7 @@ index daeb9327d2..30b0a5bbf1 100644
    return false;
  }
  
-@@ -987,6 +1066,13 @@ ResultCode SandboxWin::StartSandboxedProcess(
+@@ -1056,6 +1066,13 @@
        cmd_line, options, delegate, policy.get());
    if (SBOX_ALL_OK != result) {
      DWORD last_error = GetLastError();
@@ -191,7 +187,7 @@ index daeb9327d2..30b0a5bbf1 100644
      std::move(result_callback).Run(base::Process(), last_error, result);
      return result;
    }
-@@ -1015,10 +1101,17 @@ void SandboxWin::FinishStartSandboxedProcess(
+@@ -1084,10 +1101,17 @@
    TRACE_EVENT_END("startup", perfetto::Track(trace_event_id));
    if (SBOX_ALL_OK != result) {
      base::UmaHistogramSparse("Process.Sandbox.Launch.Error", last_error);
@@ -212,38 +208,15 @@ index daeb9327d2..30b0a5bbf1 100644
      std::move(result_callback).Run(base::Process(), last_error, result);
      return;
 diff --git a/sandbox/win/src/interception.cc b/sandbox/win/src/interception.cc
-index d074722947..40329e81fa 100644
 --- a/sandbox/win/src/interception.cc
 +++ b/sandbox/win/src/interception.cc
-@@ -389,12 +391,61 @@ InterceptionManager::PatchClientFunctions(DllInterceptionData* thunks,
-   if (!ntdll_base)
-     return base::unexpected(SBOX_ERROR_NO_HANDLE);
- 
-+  if (base::win::GetVersion() <= base::win::Version::VISTA) {
-+    Wow64 WowHelper(&child_.get(), ntdll_base);
-+    if (!WowHelper.WaitForNtdll())
-+      return base::unexpected(SBOX_ERROR_NO_HANDLE);
-+  }
-+
-   PatchClientResultData patch;
-   patch.dll_data.data_bytes = thunk_bytes;
-   patch.dll_data.num_thunks = 0;
-   patch.dll_data.used_bytes = offsetof(DllInterceptionData, thunks);
- 
--  ServiceResolverThunk thunk(child_->Process(), /*relaxed=*/true);
-+  std::unique_ptr<ServiceResolverThunk> thunk;
-+#if defined(_WIN64)
-+  thunk = std::make_unique<ServiceResolverThunk>(child_->Process(), true);
-+#else
-+  base::win::OSInfo* os_info = base::win::OSInfo::GetInstance();
-+  base::win::Version real_os_version = os_info->Kernel32Version();
-+  if (os_info->IsWowX86OnAMD64()) {
-+    if (real_os_version >= base::win::Version::WIN10)
-+      thunk.reset(new Wow64W10ResolverThunk(child_->Process(), true));
-+    else if (real_os_version >= base::win::Version::WIN8)
-+      thunk.reset(new Wow64W8ResolverThunk(child_->Process(), true));
+@@ -413,8 +413,33 @@
+       thunk.reset(new Wow64W10ResolverThunk(child_->Process(), true));
+     else if (real_os_version >= base::win::Version::WIN8)
+       thunk.reset(new Wow64W8ResolverThunk(child_->Process(), true));
+-    else
 +    else {
-+      thunk.reset(new Wow64ResolverThunk(child_->Process(), true));
+       thunk.reset(new Wow64ResolverThunk(child_->Process(), true));
 +      // A 32-bit child on 64-bit XP, Vista or 7 can reach this point before
 +      // its ntdll is fully readable, and every ReadProcessMemory against it
 +      // fails with ERROR_PARTIAL_COPY until it is -- taking the thunk setup
@@ -269,20 +242,13 @@ index d074722947..40329e81fa 100644
 +        ::Sleep(10);
 +      }
 +    }
-+  } else if (real_os_version >= base::win::Version::WIN8) {
-+    thunk.reset(new Win8ResolverThunk(child_->Process(), true));
-+  } else {
-+    thunk.reset(new ServiceResolverThunk(child_->Process(), true));
-+  }
-+#endif
- 
-   patch.originals = {};
-   for (const auto& interception : interceptions_) {
+   } else if (real_os_version >= base::win::Version::WIN8) {
+     thunk.reset(new Win8ResolverThunk(child_->Process(), true));
+   } else {
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index d4f0389839..82ee0fd814 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
-@@ -3836,6 +3837,12 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
+@@ -3837,6 +3837,12 @@
        sandbox::policy::switches::kDisableLandlockSandbox,
        sandbox::policy::switches::kDisableSeccompFilterSandbox,
        sandbox::policy::switches::kNoSandbox,
@@ -296,27 +262,25 @@ index d4f0389839..82ee0fd814 100644
        switches::kDisableDevShmUsage,
  #endif
 diff --git a/content/browser/gpu/gpu_process_host.cc b/content/browser/gpu/gpu_process_host.cc
-index 9805811404..e568a0627b 100644
 --- a/content/browser/gpu/gpu_process_host.cc
 +++ b/content/browser/gpu/gpu_process_host.cc
-@@ -256,6 +257,12 @@ static const char* const kSwitchNames[] = {
-     sandbox::policy::switches::kDisableGpuSandbox,
+@@ -258,6 +258,12 @@
      sandbox::policy::switches::kDisableLandlockSandbox,
      sandbox::policy::switches::kNoSandbox,
-+#if BUILDFLAG(IS_WIN)
+ #if BUILDFLAG(IS_WIN)
 +    // Must travel with kNoSandbox: the child decides what it is from its own
 +    // command line, so if this does not reach it, it will try to initialize
 +    // sandbox target services that the browser never set up for it.
 +    sandbox::policy::switches::kLegacySandbox,
 +#endif
- #if BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_WIN)
      sandbox::policy::switches::kAllowThirdPartyModules,
  #endif
+ #if BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
 diff --git a/content/browser/service_host/utility_process_host.cc b/content/browser/service_host/utility_process_host.cc
-index a824c0f059..785cda9f99 100644
 --- a/content/browser/service_host/utility_process_host.cc
 +++ b/content/browser/service_host/utility_process_host.cc
-@@ -451,6 +451,12 @@ bool UtilityProcessHost::StartProcess() {
+@@ -451,6 +451,12 @@
        network::switches::kTestThirdPartyCookiePhaseout,
        network::switches::kDisableSharedDictionaryStorageCleanupForTesting,
        sandbox::policy::switches::kNoSandbox,
@@ -330,19 +294,17 @@ index a824c0f059..785cda9f99 100644
        sandbox::policy::switches::kDisableSeccompFilterSandbox,
  #if BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
 diff --git a/electron/BUILD.gn b/electron/BUILD.gn
-index 2f7ea11793..6fdea1b4a1 100644
 --- a/electron/BUILD.gn
 +++ b/electron/BUILD.gn
-@@ -11,6 +12,8 @@ import("//printing/buildflags/buildflags.gni")
- import("//testing/test.gni")
+@@ -13,6 +13,7 @@
  import("//third_party/electron_node/node.gni")
  import("//third_party/ffmpeg/ffmpeg_options.gni")
-+import("//third_party/widevine/cdm/widevine.gni")
+ import("//third_party/widevine/cdm/widevine.gni")
 +import("//third_party/winwrap/winwrap.gni")
  import("//tools/generate_library_loader/generate_library_loader.gni")
  import("//tools/grit/grit_rule.gni")
  import("//tools/grit/repack.gni")
-@@ -1863,6 +1898,24 @@ dist_zip("electron_dist_zip") {
+@@ -1897,6 +1898,23 @@
      ":electron_version_file",
      ":licenses",
    ]
@@ -363,7 +325,6 @@ index 2f7ea11793..6fdea1b4a1 100644
 +    # copy_wow_helper is itself defined only for current_cpu == "x86".
 +    data_deps += [ "//sandbox/win:copy_wow_helper" ]
 +  }
-+
    if (is_linux) {
      if (is_official_build) {
        data_deps += [

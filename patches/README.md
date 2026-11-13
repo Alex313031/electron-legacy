@@ -37,6 +37,72 @@ runhook downloads, so a later `gclient sync`/`runhooks` will wipe them. Re-apply
 Patches are byte-exact (some contain intentional CRLF lines); see
 `.gitattributes`. Don't let an editor normalize line endings in them.
 
+## Generating a patch: do not use `git diff` alone
+
+The whole series lives in the checkout as **uncommitted working-tree changes**.
+Nothing is ever committed there, so `git diff` in `checkout/src` compares
+against pristine upstream, not against "the tree before my change". A patch
+generated with
+
+```sh
+git -C checkout/src diff ui/gl/gl_features.cc        # WRONG
+```
+
+therefore contains every earlier patch's edits to that file as well as yours.
+
+This does not fail loudly. The over-broad patch still applies to a *pristine*
+file, so it looks fine, and `apply_series` skips any patch that reverse-applies
+cleanly — so an incremental tree, where it is already applied, never retries it.
+It breaks the first time somebody applies the whole series in order from
+scratch, which may be weeks later and on somebody else's machine. Both
+`other/16` and `other/22` were generated this way and broke exactly that way:
+16 had swallowed three `chromium/ui/` patches' edits to `gl_features.cc` and was
+four hunks where it needed one line; 22 had swallowed
+`chromium/sandbox/0202`'s thunk-selection rewrite into a single hunk of
+`interception.cc`.
+
+Snapshot the file first, change it, then diff the two:
+
+```sh
+cp checkout/src/ui/gl/gl_features.cc /tmp/before.cc
+# ...make the change...
+diff -u --label a/ui/gl/gl_features.cc --label b/ui/gl/gl_features.cc \
+    /tmp/before.cc checkout/src/ui/gl/gl_features.cc
+```
+
+Prepend `diff --git a/<path> b/<path>` so `git apply` sees a normal patch.
+
+Picking your hunks out of a `git diff` **is not a substitute**. A hunk is a
+region, not a change: one hunk can hold your three lines and another patch's
+forty, and keeping it keeps both. That is precisely how `other/22` broke.
+
+For a file inside a nested git repo — `electron/`, `third_party/angle/`,
+`third_party/electron_node/` — `git diff` from `checkout/src` does not see it
+at all. Either diff from inside that repo with the path rewritten:
+
+```sh
+git -C checkout/src/electron diff --src-prefix=a/electron/ --dst-prefix=b/electron/ BUILD.gn
+```
+
+or use the snapshot method above, which does not care.
+
+### Checking it
+
+```sh
+git -C checkout/src apply --reverse --check <patch>   # matches the tree exactly
+```
+
+That proves the patch describes what is there. It does **not** prove the patch
+applies in series order — only a build from scratch does, so run one before
+trusting a new patch, or at least confirm the patch does not touch a file an
+earlier series already touches.
+
+A patch that fails `--reverse --check` on a fully patched tree is not
+necessarily broken: where two patches edit the same region, the earlier one can
+no longer be reversed once the later one is in. `other/12` and `other/14` are
+both in that state and are fine. The symptom to worry about is the opposite —
+a patch that will not apply *forward* during a clean build.
+
 ## Header
 
 Every patch starts with a plain-text header, which `git apply` ignores:

@@ -87,3 +87,4 @@
    Chromium's installer policy lives in `chrome/browser/component_updater`, which Electron doesn't
    link. Either a small fetcher against the component-update endpoint, or a real
    `ComponentUpdateService`. L1/L2 stays out of reach either way without VMP signing certs
+ - Add standalone NodeJS XP/Vista patch for libuv functions (still requires an XP compatible CRT)

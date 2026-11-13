@@ -32,64 +32,26 @@ retries 3.0 as 2.0 and succeeds. The EGL_BAD_ATTRIBUTE errors logged along the
 way are noise; a genuinely failed retry logs "Fallback eglCreateContext ES 2.0
 failed" instead.
 
+The flag itself, its accessor and the call site in GetDisplayTypes() all arrive
+with patches/chromium/ui/0007, which is the revert that brings the D3D9 backend
+back. That revert leaves the feature off, matching upstream's position at the
+time it was removed, so all this patch does is change the default to on. It was
+larger once: generated with `git diff` against a tree that already had the
+chromium series applied, it had swallowed 0007's, 0027's and 0028's edits to
+this same file as though they were its own. That applies to a pristine file and
+conflicts in the real series order, which only shows up on a build from
+scratch -- apply_series skips a patch that reverse-applies, so an incremental
+tree never retried it.
+
 diff --git a/ui/gl/gl_features.cc b/ui/gl/gl_features.cc
-index d7ef4195d1..bbfaf97c9e 100644
 --- a/ui/gl/gl_features.cc
 +++ b/ui/gl/gl_features.cc
-@@ -115,7 +115,14 @@ BASE_FEATURE(kDefaultPassthroughCommandDecoder,
- // Controls whether the GPU process falls back to software if GLES3 is not
- // supported.
- BASE_FEATURE(kFallbackToSWIfGLES3NotSupported,
-+#if BUILDFLAG(IS_WIN)
-+             // TODO(https://crbug.com/444049511): Currently disabled on
-+             // Windows for D3D9 users that are still on ES 2. Enable once
-+             // crbug.com/40874754 is fixed, deprecating D3D9 usage.
-+             base::FEATURE_DISABLED_BY_DEFAULT);
-+#else   // BUILDFLAG(IS_CHROMEOS)
-              base::FEATURE_ENABLED_BY_DEFAULT);
-+#endif  // BUILDFLAG(IS_WIN)
- #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
- 
- #if BUILDFLAG(IS_WIN)
-@@ -320,7 +327,7 @@ bool IsSwiftShaderUsedForWebGLByCommandLine(
- 
- // Allow fallback to SwfitShader without command line flags during the
- // deprecation period.
--BASE_FEATURE(kAllowSwiftShaderFallback, base::FEATURE_DISABLED_BY_DEFAULT);
-+BASE_FEATURE(kAllowSwiftShaderFallback, base::FEATURE_ENABLED_BY_DEFAULT);
- 
- bool IsSwiftShaderAllowedByFeature() {
-   return base::FeatureList::IsEnabled(kAllowSwiftShaderFallback);
-@@ -364,7 +371,7 @@ bool IsAnySoftwareGLAllowed(const base::CommandLine* command_line) {
- }
- 
- BASE_FEATURE(kAllowSoftwareGLFallbackDueToCrashes,
--             base::FEATURE_DISABLED_BY_DEFAULT);
-+             base::FEATURE_ENABLED_BY_DEFAULT);
- 
- bool IsSoftwareGLFallbackDueToCrashesAllowed(
-     const base::CommandLine* command_line) {
-@@ -375,6 +382,23 @@ bool IsSoftwareGLFallbackDueToCrashesAllowed(
+@@ -382,7 +382,7 @@
    return base::FeatureList::IsEnabled(kAllowSoftwareGLFallbackDueToCrashes);
  }
  
-+// Enabled here, disabled upstream. This only appends ANGLE_D3D9 to the list of
-+// display types to try, after ANGLE_D3D11 -- see GetDisplayTypes() in
-+// ui/gl/init/gl_display_initializer.cc -- so on anything where D3D11
-+// initialises, which is every Windows this feature was turned off for, D3D9 is
-+// never reached and the default costs nothing.
-+//
-+// It is not free to leave off. Vista has no D3D11 at all without the Platform
-+// Update, so with the fallback disabled the list holds D3D11 alone, that fails,
-+// and the GPU process skips to SwiftShader and dies there -- reported as
-+// "Initialization of all (1) EGL display types failed". D3D9 works on Vista;
-+// nothing was selecting it.
+-BASE_FEATURE(kAllowANGLED3D9Fallback, base::FEATURE_DISABLED_BY_DEFAULT);
 +BASE_FEATURE(kAllowANGLED3D9Fallback, base::FEATURE_ENABLED_BY_DEFAULT);
-+
-+bool IsANGLED3D9FallbackAllowed() {
-+  return base::FeatureList::IsEnabled(kAllowANGLED3D9Fallback);
-+}
-+
- #if BUILDFLAG(IS_ANDROID)
- BASE_FEATURE(kAndroidLimitRgb565DisplayToApi32,
-              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ bool IsANGLED3D9FallbackAllowed() {
+   return base::FeatureList::IsEnabled(kAllowANGLED3D9Fallback);
