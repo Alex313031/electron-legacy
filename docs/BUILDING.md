@@ -42,7 +42,8 @@ A normal release build targets Windows 7 and later. Vista and XP need `--xp`:
 ```
 
 It builds into its own `out/XP-<arch>`, so switching between an XP and a normal build stays
-incremental, and links `third_party/winwrap` to supply Win32 functions the older OS doesn't export.
+incremental, and links my [winwrap library](https://github.com/Alex313031/winwrap#readme)
+(lives in`third_party/winwrap`) to supply Win32 functions the older OS doesn't export.
 
 **Vista and XP** both work as of 44.11.1, and the resulting binary has been run on every Windows
 NT release from XP SP3 to 11 — sandboxed, with no command-line flags. If a child process ever

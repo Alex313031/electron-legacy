@@ -2,7 +2,7 @@
 
 This is a set of build scripts and patches to produce builds of up-to-date [Electron](https://electronjs.org/) supporting legacy
 versions of Windows (XP/Vista/7/8/8.1), with additional enhancements listed below. One binary runs on every
-Windows NT release from XP SP3 to 11 — sandboxed, with no command-line flags.
+Windows NT release from XP to 11.
 
 ![Electron 44.11.1 running on Windows XP SP3](./assets/xp_screenshot.png)
 
