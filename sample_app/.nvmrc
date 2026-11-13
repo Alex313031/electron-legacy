@@ -1,0 +1,2 @@
+# Using npm 22.x for project even though Electron uses 24
+lts/jod

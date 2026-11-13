@@ -1,0 +1,142 @@
+/* CSS colors matching Electron's default app, or inverted in light mode */
+:root {
+  --fg: #fff;
+  --bg: #26282e;
+  --panel: #2f3241;
+  --rule: #4a4d52;
+  --dim: #ddd;
+  --good: #77dd77;
+  --bad: #ff6c6c;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --fg: #000;
+    --bg: #eeeeee;
+    --panel: #f3f3f4;
+    --rule: #d6d7d9;
+    --dim: #454545;
+    --good: #13bb33;
+    --bad: #dd221f;
+  }
+}
+
+html {
+  box-sizing: border-box;
+}
+*,
+*:before,
+*:after {
+  box-sizing: inherit;
+}
+
+.bold {
+  font-weight: bold;
+}
+
+.italic {
+  font-style: italic;
+}
+
+.underline {
+  text-decoration: underline;
+}
+
+.small {
+  font-size: small;
+}
+
+body {
+  margin: 0;
+  padding: 16px 20px 28px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 sans-serif;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+h3 {
+  margin: 8px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+section {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.hint {
+  margin: 0 0 10px;
+  max-width: 68ch;
+  color: var(--dim);
+}
+
+.facts {
+  border-collapse: collapse;
+  width: 100%;
+}
+.facts th,
+.facts td {
+  padding: 3px 10px 3px 0;
+  text-align: left;
+  vertical-align: top;
+}
+.facts th {
+  width: 15em;
+  font-weight: 400;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.facts td {
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
+/* Table rows that carry a pass/fail answer rather than a plain value. */
+.yes { color: var(--good); }
+.no { color: var(--bad); }
+
+pre {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--bg);
+  font: 12px/1.45 monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+code {
+  font-family: monospace;
+}
+
+/* center something */
+.center {
+  max-width: 100%;
+  height: auto;
+  align-content: center;
+  text-align: center;
+}
+
+.intro {
+  max-width: 68ch !important;
+}

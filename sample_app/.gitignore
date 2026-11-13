@@ -1,0 +1,13 @@
+# OS Stuff
+.DS_Store
+.eslintcache
+.directory
+Thumbs.db
+__pycache__/
+
+# Build stuff
+/electron/
+/test/
+/dist/
+node_modules/
+yarn.lock

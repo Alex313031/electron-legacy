@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="main.css">
+    <title>Electron Legacy Tests</title>
+    <meta name="color-scheme" content="light dark">
+</head>
+<body>
+    <h1 class="center underline">Electron Legacy Self Test</h1>
+    <p class="hint intro italic center">Everything below is measured on this machine at load. See
+    <strong>Tools</strong> for <code>chrome://gpu</code>, <code>chrome://media-internals</code> and 
+    main process debugger.</p>
+
+    <section>
+        <h2>Build</h2>
+        <table class="facts">
+            <tr><th>App Version:</th><td id="app-version">&mdash;</td></tr>
+            <tr><th>Electron:</th><td id="electron-version">&mdash;</td></tr>
+            <tr><th>Chromium:</th><td id="chrome-version">&mdash;</td></tr>
+            <tr><th>NodeJS:</th><td id="node-version">&mdash;</td></tr>
+            <tr><th>V8:</th><td id="v8-version">&mdash;</td></tr>
+            <tr><th>Platform:</th><td><span id="os-type">&mdash;</span> <span id="arch-type"></span></td></tr>
+            <tr><th>OS Version:</th><td id="os-release">&mdash;</td></tr>
+        </table>
+    </section>
+
+    <section>
+        <h2>Legacy Windows APIs</h2>
+        <table class="facts">
+            <!-- Restored by patches/other/10. On Win10+ it is always true; a
+                 pre-Win8 machine with DWM composition off is the case that
+                 makes it worth having back. -->
+            <tr><th>isAeroGlassEnabled()</th><td id="aero-glass">&mdash;</td></tr>
+            <tr><th>Sandboxed Renderer:</th><td id="sandboxed">&mdash;</td></tr>
+        </table>
+    </section>
+
+    <section>
+        <h2>GPU / WebGL</h2>
+        <p class="hint">The unmasked renderer string is what says whether this
+        machine got real D3D9 or fell back to SwiftShader &mdash; the fallback in
+        <code>patches/other/21</code> is deliberately silent, so the two look
+        identical from the outside.</p>
+        <table class="facts">
+            <tr><th>WebGL:</th><td id="webgl-status">&mdash;</td></tr>
+            <tr><th>WebGL 2:</th><td id="webgl2-status">&mdash;</td></tr>
+            <tr><th>Renderer:</th><td id="webgl-renderer">&mdash;</td></tr>
+            <tr><th>Vendor:</th><td id="webgl-vendor">&mdash;</td></tr>
+            <tr><th>GL Version:</th><td id="webgl-version">&mdash;</td></tr>
+            <tr><th>HW Acceleration:</th><td id="webgl-hw">&mdash;</td></tr>
+        </table>
+    </section>
+
+    <section>
+        <h2>Codecs</h2>
+        <p class="hint">The proprietary rows are what this fork adds over a stock
+        Electron build; see <code>docs/CODECS.md</code>. "probably" and
+        "maybe" are the only affirmative answers <code>canPlayType</code> gives.
+        MSE is checked separately because a codec can be decodable for playback
+        and still be refused by Media Source Extensions.</p>
+        <table class="facts" id="codec-table">
+            <tr><th>Codec</th><th>canPlayType</th><th>MSE</th></tr>
+        </table>
+
+        <h3 class="sub">Widevine</h3>
+        <p class="hint">Encrypted media needs a CDM, which this build does not
+        bundle: <code>patches/other/14</code> loads one from
+        <code>--widevine-cdm-path</code> and registers nothing without it, so
+        "not requested" below is the expected answer for a plain run rather
+        than a fault. <code>clearkey</code> is the control &mdash; it needs no
+        CDM, so if it also fails then EME itself is unavailable and the
+        Widevine rows say nothing.</p>
+        <table class="facts">
+            <tr><th>--widevine-cdm-path</th><td id="cdm-path">&mdash;</td></tr>
+            <tr><th>CDM present on disk</th><td id="cdm-present">&mdash;</td></tr>
+        </table>
+        <table class="facts" id="widevine-table">
+            <tr><th>Key system</th><th>Access</th></tr>
+        </table>
+    </section>
+
+    <section>
+        <h2>Native Node Modules</h2>
+        <p class="hint">Loaded in the main process, which is what
+        <code>electron-builder install-app-deps</code> rebuilds against the
+        headers in <code>.npmrc</code>'s <code>disturl</code>. A failure here is
+        usually an ABI mismatch, or a module built for a newer Windows than the
+        one running it.</p>
+        <table class="facts">
+            <tr><th>bufferutil</th><td id="native-module">&mdash;</td></tr>
+            <tr><th>Node ABI</th><td id="node-abi">&mdash;</td></tr>
+        </table>
+    </section>
+
+    <section>
+        <h2>Command Line</h2>
+        <pre id="command-line">&mdash;</pre>
+    </section>
+</body>
+</html>

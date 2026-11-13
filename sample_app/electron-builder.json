@@ -1,0 +1,76 @@
+{
+  "electronVersion": "44.10.2",
+  "electronDownload": {
+    "version": "44.10.2",
+    "mirror": "https://github.com/Alex313031/electron-legacy/releases/download/v"
+  },
+  "asar": true,
+  "productName": "Electron Legacy Test",
+  "appId": "com.alex313031.electron-legacy-sample",
+  "copyright": "Copyright © 2026 Alex313031",
+  "generateUpdatesFilesForAllChannels": false,
+  "directories": {
+      "app": "src",
+      "buildResources": "assets",
+      "output": "dist"
+  },
+  "files": [ "**/*" ],
+  "extraFiles": [
+    {
+      "from": "./README.md"
+    }
+  ],
+  "linux": {
+    "target": [
+      "zip",
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "icon": "assets/icons",
+    "maintainer": "Alex313031",
+    "vendor": "Alex313031",
+    "synopsis": "A sample Electron app for demonstrating and testing Electron Legacy.",
+    "category": "Internet;",
+    "executableName": "electron-legacy-sample",
+    "artifactName": "electron_legacy_sample_${version}_${arch}.${ext}",
+    "desktop": {
+      "Name": "Electron Legacy Test",
+      "StartupWMClass": "electron-legacy-sample",
+      "Keywords": "electron;sample;test;",
+      "Icon": "electron-legacy-sample"
+    }
+  },
+  "win": {
+    "icon": "assets/icon.ico",
+    "target": [
+      "zip",
+      "portable",
+      "nsis"
+    ],
+    "publisherName": "Alex313031",
+    "executableName": "electron_legacy_sample",
+    "artifactName": "electron_legacy_sample_${version}_${arch}.${ext}"
+  },
+  "nsis": {
+    "shortcutName": "Electron Legacy Test",
+    "artifactName": "electron_legacy_sample_setup_${version}_${arch}.${ext}",
+    "uninstallDisplayName": "Electron Legacy Test ${version}",
+    "deleteAppDataOnUninstall": true,
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  },
+  "portable": {
+    "artifactName": "electron_legacy_sample_portable_${version}_${arch}.${ext}"
+  },
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "icon": "assets/icon.icns",
+    "darkModeSupport": true,
+    "artifactName": "electron_legacy_sample_${version}_macos_${arch}.${ext}",
+    "target": [
+      "dmg",
+      "zip"
+    ]
+  }
+}
