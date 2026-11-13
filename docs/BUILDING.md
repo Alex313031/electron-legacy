@@ -44,9 +44,13 @@ A normal release build targets Windows 7 and later. Vista and XP need `--xp`:
 It builds into its own `out/XP-<arch>`, so switching between an XP and a normal build stays
 incremental, and links `third_party/winwrap` to supply Win32 functions the older OS doesn't export.
 
-**Vista and XP** both work as of 44.11.1. Launch with `--no-sandbox --disable-gpu` for now: the
-sandbox and the GPU process are the parts still being worked out, and everything else — windows,
-rendering, networking, Node — runs. See [TODO.md](../TODO.md).
+**Vista and XP** both work as of 44.11.1, and the resulting binary has been run on every Windows
+NT release from XP SP3 to 11 — sandboxed, with no command-line flags. If a child process ever
+fails to launch on some older machine, `--legacy-sandbox` runs the renderer, GPU and utility
+processes without a sandbox: narrower than `--no-sandbox`, and opt-in only.
+
+On a 64-bit XP or Vista host the sandbox needs `wow_helper.exe` beside `electron.exe`. The dist
+includes it; if you assemble your own, don't drop it, or every child process will fail to launch.
 
 The `eglCreateContext ES 3.0 failed with error EGL_BAD_ATTRIBUTE` messages logged on Vista are
 harmless — D3D9 only goes up to ES 2.0 and the automatic retry succeeds.

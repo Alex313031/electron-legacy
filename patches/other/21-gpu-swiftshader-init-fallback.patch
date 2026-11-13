@@ -1,0 +1,82 @@
+Title: Fall back to SwiftShader when no GL backend initializes at all
+Origin: electron-legacy (this repo)
+
+GpuInit has a SwiftShader fallback already, but it only covers a GPU that came
+up and was then blocklisted -- it has to collect GL strings to make that
+decision, so it needs a context first. The case where no display type
+initializes at all has no fallback: InitializeGLNoExtensionsOneOff returns null
+and InitializeAndStartSandbox returns false.
+
+That exits the GPU process, viz launches a replacement, the replacement fails
+identically, and nothing ever decides to stop and use software instead. On XP it
+is reached by the shortest possible route -- D3D11 cannot start because there is
+no DXGI, and D3D9 cannot start on a machine with no Direct3D display driver
+(VirtualBox has not shipped one for pre-Vista guests since 5.x) -- so the
+browser spins until it is killed, with no window. A Windows machine with no
+usable driver at all gets there too.
+
+So retry once with SwiftShader, which needs no driver. It is skipped when the
+implementation was named with --use-gl or --use-angle, because someone who asked
+for a specific backend should be told it failed rather than quietly handed
+another one, and skipped when --disable-software-rasterizer says not to.
+
+The retry has to put the implementation back to kGLImplementationNone before
+re-initializing, since InitializeStaticGLBindingsOneOff DCHECKs that nothing is
+set yet. ShutdownGL does that, and tolerates the null display -- there is no
+display to tear down, which is the whole problem.
+
+Not XP-specific, and worth sending upstream: the shape of the bug is an
+unbounded process-restart loop on any host where GL cannot start.
+
+diff --git a/gpu/ipc/service/gpu_init.cc b/gpu/ipc/service/gpu_init.cc
+index b353b10839..0fd50cb5c4 100644
+--- a/gpu/ipc/service/gpu_init.cc
++++ b/gpu/ipc/service/gpu_init.cc
+@@ -511,7 +512,46 @@ bool GpuInit::InitializeAndStartSandbox(base::CommandLine* command_line,
+         /*init_bindings*/ false, gl::GpuPreference::kDefault);
+     if (!gl_display) {
+       VLOG(1) << "gl::init::InitializeGLNoExtensionsOneOff failed";
+-      return false;
++#if BUILDFLAG(ENABLE_SWIFTSHADER)
++      // No display type initialized at all. This is a different situation from
++      // the blocklisted-GPU fallback further down, which needs a GL context to
++      // have come up before it can ask the driver what it is: here the machine
++      // has no usable driver for any of the backends that were tried. Returning
++      // false exits the GPU process, viz launches a replacement, and that one
++      // fails in exactly the same way, so without a retry the process loops
++      // forever and the host never falls back to anything. Try SwiftShader
++      // once, which needs no driver at all.
++      //
++      // Deliberately skipped when the implementation was named on the command
++      // line: somebody who passed --use-gl or --use-angle wants to be told that
++      // the thing they asked for failed, not quietly handed something else.
++      if (!gl_use_swiftshader_ &&
++          !gpu_preferences_.disable_software_rasterizer &&
++          !gl::GetRequestedGLImplementationFromCommandLine(command_line)
++               .has_value()) {
++        command_line->AppendSwitchASCII(switches::kUseGL,
++                                        gl::kGLImplementationANGLEName);
++        command_line->AppendSwitchASCII(
++            switches::kUseANGLE, gl::kANGLEImplementationSwiftShaderName);
++        gl_use_swiftshader_ = true;
++
++        // Puts the implementation back to kGLImplementationNone so the
++        // bindings can be set up again for the new one -- initializing them
++        // twice is a DCHECK. A null display is expected and handled; there is
++        // no display to tear down because nothing initialized.
++        gl::init::ShutdownGL(/*display=*/nullptr, /*due_to_fallback=*/true);
++
++        gl_display = gl::init::InitializeGLNoExtensionsOneOff(
++            /*init_bindings=*/true, gl::GpuPreference::kDefault);
++        if (!gl_display) {
++          VLOG(1) << "gl::init::InitializeGLNoExtensionsOneOff with "
++                  << "SwiftShader failed";
++        }
++      }
++#endif  // BUILDFLAG(ENABLE_SWIFTSHADER)
++      if (!gl_display) {
++        return false;
++      }
+     }
+   }
+ 

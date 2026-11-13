@@ -1,0 +1,103 @@
+Title: Report why the D3D9 renderer failed instead of guessing at it
+Origin: electron-legacy (this repo)
+
+Two things that together make a D3D9 failure unreadable, found while working out
+why the GPU process will not start on XP. The D3D9 backend is restored by
+patches/chromium/third_party/angle/0003..0005, so this sits on top of those.
+
+Renderer9::initialize retries GetDeviceCaps ten times at 100 ms apart, because a
+driver can answer D3DERR_NOTAVAILABLE while it is still coming up. A machine
+with no Direct3D-capable display driver answers that way every time, and when
+the budget runs out the loop simply ends: nothing checks the result. mDeviceCaps
+is a plain member that nothing has assigned, so the shader-model and StretchRect
+checks immediately below read uninitialized memory, and the renderer is
+rejected with "Renderer does not support PS 2.0, aborting!" no matter what the
+hardware can actually do. Reading uninitialized memory is a bug on its own; the
+misdirection is what costs time. Checking the result turns it into "Failed to
+get device caps after 10 attempts, HRESULT: 0x8876086A", which says what
+happened.
+
+The second half is that none of those messages were reaching us anyway.
+CreateRendererD3D logs each renderer's failure with ANGLE's ERR(), which on
+Windows is an fprintf to the stderr of the process ANGLE is linked into -- the
+GPU process, whose stderr is not where the console is. What does come back is
+the egl::Error, which Chromium surfaces through its EGL_KHR_debug callback, and
+that only said "No available renderers" -- the one thing already obvious from
+eglInitialize having failed. The reasons now travel with the error as well as
+going to ERR(), so a host in another process can see them.
+
+Both are upstream-shaped fixes rather than anything XP-specific, and worth
+sending to ANGLE.
+
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/DisplayD3D.cpp b/third_party/angle/src/libANGLE/renderer/d3d/DisplayD3D.cpp
+--- a/third_party/angle/src/libANGLE/renderer/d3d/DisplayD3D.cpp
++++ b/third_party/angle/src/libANGLE/renderer/d3d/DisplayD3D.cpp
+@@ -123,6 +123,8 @@
+         UNIMPLEMENTED();
+     }
+ 
++    std::string rendererFailures;
++
+     for (size_t i = 0; i < rendererCreationFunctions.size(); i++)
+     {
+         RendererD3D *renderer = rendererCreationFunctions[i](display);
+@@ -155,8 +157,24 @@
+         // Failed to create the renderer, try the next
+         SafeDelete(renderer);
+         ERR() << "Failed to create D3D renderer: " << result.getMessage();
++
++        // Carry the reasons out with the error as well as logging them. ERR() goes to
++        // this process's stderr, which is not where a host embedding ANGLE in a child
++        // process is looking; the returned error reaches whatever the host installed as
++        // an EGL_KHR_debug callback. Without this the host is told only that every
++        // renderer failed, which is the one thing it could already see.
++        if (!rendererFailures.empty())
++        {
++            rendererFailures += "; ";
++        }
++        rendererFailures += result.getMessage();
+     }
+ 
++    if (!rendererFailures.empty())
++    {
++        return egl::Error(EGL_NOT_INITIALIZED,
++                          "No available renderers. " + rendererFailures);
++    }
+     return egl::Error(EGL_NOT_INITIALIZED, "No available renderers.");
+ }
+ 
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Renderer9.cpp b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Renderer9.cpp
+--- a/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Renderer9.cpp
++++ b/third_party/angle/src/libANGLE/renderer/d3d/d3d9/Renderer9.cpp
+@@ -246,7 +246,10 @@
+         //  corresponds to
+     }
+ 
+-    HRESULT result;
++    // Initialized to a failure, not S_OK: the check after the caps loop below treats
++    // this as "no caps were obtained", so the safe starting value is the one that says
++    // nothing has succeeded yet.
++    HRESULT result = E_FAIL;
+ 
+     // Give up on getting device caps after about one second.
+     {
+@@ -271,6 +274,19 @@
+                 return egl::Error(EGL_NOT_INITIALIZED, D3D9_INIT_OTHER_ERROR, err.str());
+             }
+         }
++
++        // The retry budget can run out with result still D3DERR_NOTAVAILABLE, which is
++        // what a machine with no Direct3D-capable display driver returns every time.
++        // Falling through leaves mDeviceCaps uninitialized -- it is a plain member that
++        // nothing above assigns -- so the PS version and StretchRect checks below then
++        // test whatever it happens to hold, and the renderer is usually rejected with
++        // "does not support PS 2.0" regardless of what the hardware can do.
++        if (FAILED(result))
++        {
++            std::ostringstream err;
++            err << "Failed to get device caps after 10 attempts, " << gl::FmtHR(result);
++            return egl::Error(EGL_NOT_INITIALIZED, D3D9_INIT_OTHER_ERROR, err.str());
++        }
+     }
+ 
+ #if ANGLE_SUPPORT_SHADER_MODEL_2

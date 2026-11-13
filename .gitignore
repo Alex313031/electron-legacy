@@ -25,6 +25,8 @@ __pycache__/
 /src/
 /dist/
 build.log
+
+# gclient stuff
 .gclient
 .gclient_entries
 .gclient_previous_*

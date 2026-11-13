@@ -1,0 +1,369 @@
+Title: --legacy-sandbox, and make a sandboxed launch failure say why
+Origin: electron-legacy (this repo), after Supermium
+       (https://github.com/win32ss/supermium)
+
+Part of this is adapted from Supermium's sandbox patch, which reached the
+problem first. Most of that patch is already in this tree --
+patches/chromium/sandbox/0202 and 0319 restore the per-version ntdll
+service-interception machinery it depends on, and the resolver thunks,
+win_utils helpers and Vista token gates are all present -- so what is here is
+the part that was missing, plus the diagnostics that made the remaining failure
+legible.
+
+--- The switch ---------------------------------------------------------------
+
+Supermium drops the utility-process sandbox for every Windows below 10
+outright, and offers --legacy-sandbox for the renderer and GPU. This keeps the
+sandbox on by default everywhere and puts all three behind the flag, because XP,
+7, 8.1 and 10 are sandboxing correctly here: disabling it for all of them to
+insure against a failure we have not seen would be a straight loss of a real
+security boundary. No version check is involved; the flag does nothing unless
+asked for. It is also narrower than --no-sandbox, which disables the machinery
+everywhere including the broker.
+
+Three places have to agree, which is why this touches more than one file:
+
+  - SandboxTypeFromCommandLine tells a child what it is. This is the part
+    Supermium changes.
+  - The browser decides whether to sandbox a child from the delegate's sandbox
+    type, which is fixed per process type and never reads a command line, so
+    IsUnsandboxedProcess has to answer the flag too. Without it the browser
+    would build a policy and spawn through the broker while the child believed
+    it was unsandboxed.
+  - The flag has to reach the child at all, so it joins kNoSandbox in the switch
+    lists the renderer, GPU and utility hosts forward. Otherwise a child would
+    try to initialize sandbox target services the browser never set up.
+
+Also from Supermium: a 32-bit child on 64-bit XP, Vista or 7 can reach
+interception setup before its ntdll is readable, and every ReadProcessMemory
+against it fails with ERROR_PARTIAL_COPY until it is, taking the thunk setup
+with it. Waiting for the first read to land fixes it. Bounded here, unlike the
+original, which spins without a limit -- this runs on the browser's
+process-launcher thread, so an unbounded wait would stall every later child
+launch rather than failing one, and giving up merely restores the behaviour
+without the loop.
+
+--- The diagnostics ----------------------------------------------------------
+
+Two paths report a sandboxed child that never started, and in a release build
+neither says anything:
+
+  - GeneratePolicyForSandboxedProcess failing is silent upstream. Not a DLOG,
+    nothing. This is the interesting one for an old OS, because it is where a
+    policy the running Windows cannot express would be rejected.
+  - FinishStartSandboxedProcess logs with DLOG and DPLOG, which compile to
+    nothing when NDEBUG is defined. An official build with
+    dcheck_always_on = false drops the one message naming the ResultCode, and
+    --enable-logging --v=1 cannot bring back a call that is not in the binary.
+
+The symptom is a child that simply never appears, indistinguishable from that
+process type not being used. Both now log at ERROR with the delegate's sandbox
+tag, so the message names the process type and the ResultCode from
+sandbox/win/src/sandbox_types.h.
+
+That is not decoration: it is what identified the one platform still failing.
+64-bit pre-Win7 Windows reports
+
+  Failed to launch sandboxed process "gpu!kGpu": ResultCode 7, last error 0
+
+which is SBOX_ERROR_NO_HANDLE from InterceptionManager::PatchClientFunctions.
+On <= Vista that calls Wow64::WaitForNtdll, which returns true immediately
+unless the child is a WoW64 process, and otherwise launches wow_helper.exe from
+beside the running exe. Electron never packaged wow_helper.exe -- it is a
+Chromium sandbox artifact, named nowhere in electron/ -- so on a 64-bit XP or
+Vista host the CreateProcess failed and every child launch failed with it.
+32-bit hosts never enter that path, which is why 32-bit XP sandboxed correctly
+and a 64-bit Vista did not. Win7 and later skip the block entirely.
+
+So this was never a Vista problem, or a flaky one: it is a missing file on a
+64-bit host, deterministically. The last hunk ships it. GN already copies it
+into the output directory for an x86 build (//sandbox/win:copy_wow_helper,
+reached through //sandbox/win:sandbox's deps), but dist_zip packs runtime deps,
+and a runtime-deps walk does not follow a plain deps edge into a copy target --
+so naming it as a data_dep of the zip is what puts it in the package. Confirmed
+on a 64-bit Vista: with the file beside electron.exe, every child launches
+sandboxed.
+
+diff --git a/sandbox/policy/switches.h b/sandbox/policy/switches.h
+index 869ddee323..efc6fc41b8 100644
+--- a/sandbox/policy/switches.h
++++ b/sandbox/policy/switches.h
+@@ -31,6 +32,7 @@ SANDBOX_POLICY_EXPORT extern const char kNoZygoteSandbox[];
+ #if BUILDFLAG(IS_WIN)
+ SANDBOX_POLICY_EXPORT extern const char kAllowThirdPartyModules[];
+ SANDBOX_POLICY_EXPORT extern const char kAddXrAppContainerCaps[];
++SANDBOX_POLICY_EXPORT extern const char kLegacySandbox[];
+ #endif
+ #if BUILDFLAG(IS_MAC)
+ SANDBOX_POLICY_EXPORT extern const char kEnableSandboxLogging[];
+diff --git a/sandbox/policy/switches.cc b/sandbox/policy/switches.cc
+index 29be2076af..f37486dcf7 100644
+--- a/sandbox/policy/switches.cc
++++ b/sandbox/policy/switches.cc
+@@ -58,6 +64,14 @@ const char kAllowThirdPartyModules[] = "allow-third-party-modules";
+ // compositing.
+ const char kAddXrAppContainerCaps[] = "add-xr-appcontainer-caps";
+ 
++// Runs the renderer, GPU and utility processes without a sandbox, while
++// leaving the rest of the browser's sandboxing alone. An escape hatch for the
++// older Windows releases this build supports, where the sandbox exercises
++// paths nothing has run for years: it is strictly opt-in, so a version that
++// sandboxes correctly is not quietly weakened, and it is narrower than
++// --no-sandbox, which turns the machinery off everywhere.
++const char kLegacySandbox[] = "legacy-sandbox";
++
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
+diff --git a/sandbox/policy/sandbox_type.cc b/sandbox/policy/sandbox_type.cc
+index 1b87649d48..d5d3e23175 100644
+--- a/sandbox/policy/sandbox_type.cc
++++ b/sandbox/policy/sandbox_type.cc
+@@ -192,15 +192,34 @@ sandbox::mojom::Sandbox SandboxTypeFromCommandLine(
+   if (process_type.empty())
+     return Sandbox::kNoSandbox;
+ 
+-  if (process_type == switches::kRendererProcess)
++#if BUILDFLAG(IS_WIN)
++  // --legacy-sandbox drops the sandbox for exactly the three child types that
++  // have one of their own on Windows. Opt-in only, and deliberately not gated
++  // on a Windows version: Supermium, which this follows, disables the utility
++  // sandbox for everything below Win10 outright, but XP through 8.1 are
++  // currently sandboxing correctly here, and turning that off for all of them
++  // to buy insurance against a failure we have not seen would be a straight
++  // loss. The flag is here so that if one of them does turn out to be flaky,
++  // the answer is a command-line argument rather than a rebuild.
++  const bool legacy_sandbox = command_line.HasSwitch(switches::kLegacySandbox);
++#else
++  const bool legacy_sandbox = false;
++#endif
++
++  if (process_type == switches::kRendererProcess) {
++    if (legacy_sandbox)
++      return Sandbox::kNoSandbox;
+     return Sandbox::kRenderer;
++  }
+ 
+   if (process_type == switches::kUtilityProcess) {
++    if (legacy_sandbox)
++      return Sandbox::kNoSandbox;
+     return UtilitySandboxTypeFromString(
+         command_line.GetSwitchValueASCII(switches::kServiceSandboxType));
+   }
+   if (process_type == switches::kGpuProcess) {
+-    if (command_line.HasSwitch(switches::kDisableGpuSandbox))
++    if (command_line.HasSwitch(switches::kDisableGpuSandbox) || legacy_sandbox)
+       return Sandbox::kNoSandbox;
+     return Sandbox::kGpu;
+   }
+diff --git a/sandbox/policy/win/sandbox_win.cc b/sandbox/policy/win/sandbox_win.cc
+index daeb9327d2..30b0a5bbf1 100644
+--- a/sandbox/policy/win/sandbox_win.cc
++++ b/sandbox/policy/win/sandbox_win.cc
+@@ -675,6 +739,16 @@ bool IsUnsandboxedProcess(
+     return true;
+   if (launcher_process_command_line.HasSwitch(switches::kNoSandbox))
+     return true;
++  // --legacy-sandbox has to be answered here as well as in
++  // SandboxTypeFromCommandLine. That function tells a child what it is, but
++  // the browser decides whether to sandbox a child from the delegate's type,
++  // which is fixed per process type and never consults a command line -- so
++  // without this the browser would still build a policy and spawn through the
++  // broker while the child believed it was unsandboxed.
++  if (launcher_process_command_line.HasSwitch(switches::kLegacySandbox))
++    return true;
++  if (cmd_line.HasSwitch(switches::kLegacySandbox))
++    return true;
+   return false;
+ }
+ 
+@@ -987,6 +1066,13 @@ ResultCode SandboxWin::StartSandboxedProcess(
+       cmd_line, options, delegate, policy.get());
+   if (SBOX_ALL_OK != result) {
+     DWORD last_error = GetLastError();
++    // This path is silent upstream -- not even a DLOG -- so a policy the
++    // running OS cannot express produces a child that never starts and no
++    // reason anywhere. It is where an older Windows would be rejected, so it
++    // is the one worth hearing from.
++    LOG(ERROR) << "Sandbox policy generation failed for \""
++               << delegate->GetSandboxTag() << "\": ResultCode " << result
++               << ", last error " << last_error;
+     std::move(result_callback).Run(base::Process(), last_error, result);
+     return result;
+   }
+@@ -1015,10 +1101,17 @@ void SandboxWin::FinishStartSandboxedProcess(
+   TRACE_EVENT_END("startup", perfetto::Track(trace_event_id));
+   if (SBOX_ALL_OK != result) {
+     base::UmaHistogramSparse("Process.Sandbox.Launch.Error", last_error);
++    // DLOG and DPLOG compile to nothing in a release build, so upstream a
++    // sandboxed child that fails to spawn leaves no trace at all -- it looks
++    // like the process was simply never asked for. Naming the process type and
++    // the ResultCode is what identified the 64-bit pre-Win7 failure.
+     if (result == SBOX_ERROR_GENERIC) {
+-      DPLOG(ERROR) << "Failed to launch process";
++      PLOG(ERROR) << "Failed to launch sandboxed process \""
++                  << delegate->GetSandboxTag() << "\"";
+     } else {
+-      DLOG(ERROR) << "Failed to launch process. Error: " << result;
++      LOG(ERROR) << "Failed to launch sandboxed process \""
++                 << delegate->GetSandboxTag() << "\": ResultCode " << result
++                 << ", last error " << last_error;
+     }
+     std::move(result_callback).Run(base::Process(), last_error, result);
+     return;
+diff --git a/sandbox/win/src/interception.cc b/sandbox/win/src/interception.cc
+index d074722947..40329e81fa 100644
+--- a/sandbox/win/src/interception.cc
++++ b/sandbox/win/src/interception.cc
+@@ -389,12 +391,61 @@ InterceptionManager::PatchClientFunctions(DllInterceptionData* thunks,
+   if (!ntdll_base)
+     return base::unexpected(SBOX_ERROR_NO_HANDLE);
+ 
++  if (base::win::GetVersion() <= base::win::Version::VISTA) {
++    Wow64 WowHelper(&child_.get(), ntdll_base);
++    if (!WowHelper.WaitForNtdll())
++      return base::unexpected(SBOX_ERROR_NO_HANDLE);
++  }
++
+   PatchClientResultData patch;
+   patch.dll_data.data_bytes = thunk_bytes;
+   patch.dll_data.num_thunks = 0;
+   patch.dll_data.used_bytes = offsetof(DllInterceptionData, thunks);
+ 
+-  ServiceResolverThunk thunk(child_->Process(), /*relaxed=*/true);
++  std::unique_ptr<ServiceResolverThunk> thunk;
++#if defined(_WIN64)
++  thunk = std::make_unique<ServiceResolverThunk>(child_->Process(), true);
++#else
++  base::win::OSInfo* os_info = base::win::OSInfo::GetInstance();
++  base::win::Version real_os_version = os_info->Kernel32Version();
++  if (os_info->IsWowX86OnAMD64()) {
++    if (real_os_version >= base::win::Version::WIN10)
++      thunk.reset(new Wow64W10ResolverThunk(child_->Process(), true));
++    else if (real_os_version >= base::win::Version::WIN8)
++      thunk.reset(new Wow64W8ResolverThunk(child_->Process(), true));
++    else {
++      thunk.reset(new Wow64ResolverThunk(child_->Process(), true));
++      // A 32-bit child on 64-bit XP, Vista or 7 can reach this point before
++      // its ntdll is fully readable, and every ReadProcessMemory against it
++      // fails with ERROR_PARTIAL_COPY until it is -- taking the thunk setup
++      // below down with it. Waiting for the first read to land is enough; the
++      // value is a probe and is not used.
++      //
++      // Bounded, unlike the Supermium version this follows, which spins
++      // without a limit. This runs on the browser's process-launcher thread,
++      // so spinning forever would stall every later child launch rather than
++      // failing this one. Giving up just leaves Setup() to report a real
++      // error, which is the behaviour without this loop at all.
++      DWORD probe = 0;
++      SIZE_T bytes_read = 0;
++      constexpr int kMaxAttempts = 100;  // ~1s, 10ms apart.
++      for (int i = 0; i < kMaxAttempts; ++i) {
++        if (::ReadProcessMemory(child_->Process(), ntdll_base, &probe,
++                                sizeof(probe), &bytes_read)) {
++          break;
++        }
++        if (::GetLastError() != ERROR_PARTIAL_COPY) {
++          break;
++        }
++        ::Sleep(10);
++      }
++    }
++  } else if (real_os_version >= base::win::Version::WIN8) {
++    thunk.reset(new Win8ResolverThunk(child_->Process(), true));
++  } else {
++    thunk.reset(new ServiceResolverThunk(child_->Process(), true));
++  }
++#endif
+ 
+   patch.originals = {};
+   for (const auto& interception : interceptions_) {
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index d4f0389839..82ee0fd814 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3836,6 +3837,12 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
+       sandbox::policy::switches::kDisableLandlockSandbox,
+       sandbox::policy::switches::kDisableSeccompFilterSandbox,
+       sandbox::policy::switches::kNoSandbox,
++  #if BUILDFLAG(IS_WIN)
++      // Must travel with kNoSandbox: the child decides what it is from its own
++      // command line, so if this does not reach it, it will try to initialize
++      // sandbox target services that the browser never set up for it.
++      sandbox::policy::switches::kLegacySandbox,
++  #endif
+ #if BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
+       switches::kDisableDevShmUsage,
+ #endif
+diff --git a/content/browser/gpu/gpu_process_host.cc b/content/browser/gpu/gpu_process_host.cc
+index 9805811404..e568a0627b 100644
+--- a/content/browser/gpu/gpu_process_host.cc
++++ b/content/browser/gpu/gpu_process_host.cc
+@@ -256,6 +257,12 @@ static const char* const kSwitchNames[] = {
+     sandbox::policy::switches::kDisableGpuSandbox,
+     sandbox::policy::switches::kDisableLandlockSandbox,
+     sandbox::policy::switches::kNoSandbox,
++#if BUILDFLAG(IS_WIN)
++    // Must travel with kNoSandbox: the child decides what it is from its own
++    // command line, so if this does not reach it, it will try to initialize
++    // sandbox target services that the browser never set up for it.
++    sandbox::policy::switches::kLegacySandbox,
++#endif
+ #if BUILDFLAG(IS_WIN)
+     sandbox::policy::switches::kAllowThirdPartyModules,
+ #endif
+diff --git a/content/browser/service_host/utility_process_host.cc b/content/browser/service_host/utility_process_host.cc
+index a824c0f059..785cda9f99 100644
+--- a/content/browser/service_host/utility_process_host.cc
++++ b/content/browser/service_host/utility_process_host.cc
+@@ -451,6 +451,12 @@ bool UtilityProcessHost::StartProcess() {
+       network::switches::kTestThirdPartyCookiePhaseout,
+       network::switches::kDisableSharedDictionaryStorageCleanupForTesting,
+       sandbox::policy::switches::kNoSandbox,
++  #if BUILDFLAG(IS_WIN)
++      // Must travel with kNoSandbox: the child decides what it is from its own
++      // command line, so if this does not reach it, it will try to initialize
++      // sandbox target services that the browser never set up for it.
++      sandbox::policy::switches::kLegacySandbox,
++  #endif
+       sandbox::policy::switches::kDisableLandlockSandbox,
+       sandbox::policy::switches::kDisableSeccompFilterSandbox,
+ #if BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
+diff --git a/electron/BUILD.gn b/electron/BUILD.gn
+index 2f7ea11793..6fdea1b4a1 100644
+--- a/electron/BUILD.gn
++++ b/electron/BUILD.gn
+@@ -11,6 +12,8 @@ import("//printing/buildflags/buildflags.gni")
+ import("//testing/test.gni")
+ import("//third_party/electron_node/node.gni")
+ import("//third_party/ffmpeg/ffmpeg_options.gni")
++import("//third_party/widevine/cdm/widevine.gni")
++import("//third_party/winwrap/winwrap.gni")
+ import("//tools/generate_library_loader/generate_library_loader.gni")
+ import("//tools/grit/grit_rule.gni")
+ import("//tools/grit/repack.gni")
+@@ -1863,6 +1898,24 @@ dist_zip("electron_dist_zip") {
+     ":electron_version_file",
+     ":licenses",
+   ]
++
++  if (use_winwrap && is_win && target_cpu == "x86") {
++    # wow_helper.exe. On Windows <= Vista the sandbox broker patches a WoW64
++    # child's 64-bit ntdll by launching this, by name, from beside the running
++    # executable (Wow64::RunWowHelper). Nothing else in Electron names the
++    # file, and GN only reaches it through //sandbox/win:sandbox's deps, where
++    # the runtime-deps walk that builds this zip does not follow it -- so a
++    # 32-bit Electron on a 64-bit XP or Vista host failed every child launch
++    # with SBOX_ERROR_NO_HANDLE, because the file was simply not shipped.
++    #
++    # Gated on use_winwrap rather than on is_win alone: a build without it
++    # cannot load on Vista at all, so it can never reach the code that wants
++    # this, and an ordinary 32-bit dist stays exactly as it was. x86 only
++    # because a 64-bit child is not a WoW64 process, and because
++    # copy_wow_helper is itself defined only for current_cpu == "x86".
++    data_deps += [ "//sandbox/win:copy_wow_helper" ]
++  }
++
+   if (is_linux) {
+     if (is_official_build) {
+       data_deps += [

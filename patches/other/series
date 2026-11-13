@@ -16,3 +16,7 @@
 16-angle-d3d9-fallback-by-default.patch
 17-xp-vista-support.patch
 18-winwrap-library.patch
+19-angle-d3dcompiler-fallback.patch
+20-angle-d3d9-init-diagnostics.patch
+21-gpu-swiftshader-init-fallback.patch
+22-legacy-sandbox.patch

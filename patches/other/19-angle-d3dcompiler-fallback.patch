@@ -1,0 +1,68 @@
+Title: Let ANGLE fall back to an older d3dcompiler it has to load itself
+Origin: electron-legacy (this repo)
+
+ANGLE's D3D9 backend compiles its HLSL through d3dcompiler, and on Windows XP it
+never gets one. The copy shipped alongside Electron is d3dcompiler_47.dll from
+the Windows SDK, a prebuilt binary that statically imports FlsAlloc, FlsFree,
+FlsGetValue, FlsSetValue and InitializeCriticalSectionEx from kernel32 -- all
+Vista additions -- so XP's loader rejects it outright. It is not ours to relink,
+so winwrap cannot reach it the way it reaches everything else we build. On Vista
+it loads fine; this is XP only.
+
+HLSLCompiler already knows about older versions, but not in a way that helps.
+Its list of names is swept with GetModuleHandleExA, which only adopts a compiler
+some other module in the process has already loaded, and the LoadLibrary that
+follows asks for the single version ANGLE was built against. Nothing tries to
+load an older compiler that is present but not yet in the process -- which is
+the only kind XP can offer.
+
+So after both existing attempts fail, try LoadLibrary on each name in the list.
+That reaches d3dcompiler_43.dll from the June 2010 DirectX redistributable,
+which XP can load and which exports the D3DCompile that ensureInitialized
+requires. Ordering is unchanged, so a machine with a current compiler still gets
+it and this never runs.
+
+Only D3DCompile is actually required -- the D3DDisassemble fetched next is behind
+an ASSERT, so it is debug-only -- and every version in the list exports both.
+
+diff --git a/third_party/angle/src/libANGLE/renderer/d3d/HLSLCompiler.cpp b/third_party/angle/src/libANGLE/renderer/d3d/HLSLCompiler.cpp
+index 479e8b7..45770bc 100644
+--- a/third_party/angle/src/libANGLE/renderer/d3d/HLSLCompiler.cpp
++++ b/third_party/angle/src/libANGLE/renderer/d3d/HLSLCompiler.cpp
+@@ -148,6 +148,36 @@ angle::Result HLSLCompiler::ensureInitialized(d3d::Context *context)
+         }
+     }
+ 
++#    if defined(ANGLE_PRELOADED_D3DCOMPILER_MODULE_NAMES)
++    if (!mD3DCompilerModule)
++    {
++        // The sweep above only adopts a compiler another module in this process already
++        // loaded; the load just attempted is of one version, the one this was built
++        // against. Neither finds an older compiler that is installed but not yet loaded,
++        // which is the only kind Windows XP has: d3dcompiler_47.dll imports FlsAlloc and
++        // InitializeCriticalSectionEx from kernel32, so it cannot load there at all and
++        // the D3D9 renderer dies before compiling its first shader. d3dcompiler_43.dll,
++        // from the June 2010 DirectX redistributable, has no such imports and supplies
++        // the shader models the D3D9 backend asks for.
++        //
++        // Only D3DCompile is actually required of it -- the D3DDisassemble below is
++        // behind an ASSERT -- and every version in this list exports both.
++        for (size_t i = 0; i < ArraySize(d3dCompilerNames); ++i)
++        {
++            mD3DCompilerModule = LoadLibraryA(ANGLE_UNSAFE_TODO(d3dCompilerNames[i]));
++            if (mD3DCompilerModule)
++            {
++                WARN() << "Loaded fallback D3D compiler "
++                       << ANGLE_UNSAFE_TODO(d3dCompilerNames[i]) << ".";
++                ANGLE_HISTOGRAM_ENUMERATION("GPU.ANGLE.D3DCompilerLoadLibraryResult",
++                                            D3DCompilerDefaultLibrarySuccess,
++                                            D3DCompilerEnumBoundary);
++                break;
++            }
++        }
++    }
++#    endif  // ANGLE_PRELOADED_D3DCOMPILER_MODULE_NAMES
++
+     if (!mD3DCompilerModule)
+     {
+         DWORD lastError = GetLastError();
