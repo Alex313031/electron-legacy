@@ -76,7 +76,11 @@
    target DLL is absent from the reference set entirely. It currently reports delay imports as
    non-fatal, which is right for load time and wrong once Chromium's delay-load failure hook is in
    play, and it can only judge DLLs a reference copy was supplied for
- - Restore pre CR23 UI eyedrop on menu
+ - Tune the menu bar hover highlight if 0.24 opacity is not the pre-Refresh weight.
+   `patches/other/04` squares the corners and raises the opacity from Refresh's 0.128,
+   which fixes the mismatch against the square menus, but the exact old value was not
+   recovered from anywhere -- it was chosen to read as a selection rather than a tint. The
+   knobs are `SetHighlightOpacity` and `SetBaseColor` in `submenu_button.cc`
  - Fetch the Widevine CDM rather than being handed one. `patches/other/14` loads a CDM from
    `--widevine-cdm-path` and reads its `manifest.json` the way Chrome reads a component-updated
    one, but nothing downloads it: `BrowserProcessImpl::component_updater()` returns nullptr and
