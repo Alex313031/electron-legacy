@@ -88,3 +88,11 @@
    link. Either a small fetcher against the component-update endpoint, or a real
    `ComponentUpdateService`. L1/L2 stays out of reach either way without VMP signing certs
  - Add standalone NodeJS XP/Vista patch for libuv functions (still requires an XP compatible CRT)
+ - Handle the Chromium pin actually moving. `cache_chromium_tag` in `build.sh` stops gclient's
+   all-refs fetch of chromium/src -- the one that hangs at 574 KB rather than finishing -- only
+   when the pinned version hasn't changed, which is the normal case for an Electron patch release.
+   A real Chromium roll still goes through gclient's fetch and can still hang there. The targeted
+   version is a single `git fetch origin refs/tags/<ver>:refs/tags/<ver>`, whose `ref-prefix` is
+   filtered server-side, but it has to know the new pin before gclient updates `src/electron` --
+   so it means reading `DEPS` at `refs/tags/v<electron>` from GitHub first
+ - Log winwrap version from Electron when building with it
