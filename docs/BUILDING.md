@@ -28,7 +28,7 @@ that [Usage](./USAGE.md) installs, run `--npm` afterwards:
 ```
 
 It assembles `npm_package/` from the patched `src/electron/npm` sources plus what `--package` left
-in `dist/` — the typings, the version, and the checksums of the very zips you are about to upload.
+in `dist/`: the typings, the version, and the checksums of the very zips you are about to upload.
 Run it after `--package`, not before, or those checksums describe binaries that no longer exist.
 
 See `./build.sh --help` for all options.
@@ -46,7 +46,7 @@ incremental, and links my [winwrap library](https://github.com/Alex313031/winwra
 (lives in`third_party/winwrap`) to supply Win32 functions the older OS doesn't export.
 
 **Vista and XP** both work as of 44.11.1, and the resulting binary has been run on every Windows
-NT release from XP SP3 to 11 — sandboxed, with no command-line flags. If a child process ever
+NT release from XP SP3 to 11: sandboxed, with no command-line flags. If a child process ever
 fails to launch on some older machine, `--legacy-sandbox` runs the renderer, GPU and utility
 processes without a sandbox: narrower than `--no-sandbox`, and opt-in only.
 
@@ -54,17 +54,17 @@ On a 64-bit XP or Vista host the sandbox needs `wow_helper.exe` beside `electron
 includes it; if you assemble your own, don't drop it, or every child process will fail to launch.
 
 The `eglCreateContext ES 3.0 failed with error EGL_BAD_ATTRIBUTE` messages logged on Vista are
-harmless — D3D9 only goes up to ES 2.0 and the automatic retry succeeds.
+harmless; D3D9 only goes up to ES 2.0 and the automatic retry succeeds.
 
 On XP, ANGLE's D3D9 backend also needs `d3dcompiler_43.dll` from the
-[DirectX End-User Runtime](https://www.microsoft.com/en-us/download/details.aspx?id=35) — the
+[DirectX End-User Runtime](https://www.microsoft.com/en-us/download/details.aspx?id=35); the
 `d3dcompiler_47.dll` shipped alongside Electron is itself built against Vista APIs and cannot load
 there.
 
 ### Cross-building from Linux
 
 Experimental, but it is how the releases are made. A Linux host has no Visual Studio to find, so
-it builds against the same packaged toolchain Chromium uses, which you point the build at with two
+it builds against the same packaged toolchain [Chromium](https://www.chromium.org/) uses, which you point the build at with two
 environment variables:
 
 | Variable | What it is |
@@ -76,7 +76,7 @@ environment variables:
 whenever Chromium rolls the toolchain. You don't have to go looking for it: run the build and it
 prints the exact variable name it wants.
 
-The zip is not something you can download — make it once on a Windows machine that has Visual
+The zip is not something you can download; make it once on a Windows machine that has Visual
 Studio and the SDK installed, with depot_tools'
 [package_from_installed.py](https://chromium.googlesource.com/chromium/tools/depot_tools/+/main/win_toolchain/package_from_installed.py),
 then copy it to the Linux host.

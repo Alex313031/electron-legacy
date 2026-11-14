@@ -20,7 +20,7 @@ npm install
 npx electron .
 ```
 
-The binary downloads on first use rather than during `npm install` — the same as
+The binary downloads on first use rather than during `npm install`, the same as
 upstream Electron since v44. To fetch it ahead of time, run `npx install-electron`.
 
 ### Pointing somewhere else

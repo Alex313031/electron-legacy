@@ -8,8 +8,8 @@ assignees: ''
 ---
 
 **System Details**
- - OS: [e.g.  Ubuntu 22.04, Windows 7, 8.1, 10]
- - Electron Version [e.g.44.10.2]
+ - OS: [e.g. Ubuntu 22.04, Windows XP, Vista 7, 8.1]
+ - Electron Version [e.g. 44.11.3]
 
 **Problem**
 A clear and concise description of what the bug is.

@@ -52,7 +52,7 @@ therefore contains every earlier patch's edits to that file as well as yours.
 
 This does not fail loudly. The over-broad patch still applies to a *pristine*
 file, so it looks fine, and `apply_series` skips any patch that reverse-applies
-cleanly — so an incremental tree, where it is already applied, never retries it.
+cleanly, so an incremental tree, where it is already applied, never retries it.
 It breaks the first time somebody applies the whole series in order from
 scratch, which may be weeks later and on somebody else's machine. Both
 `other/16` and `other/22` were generated this way and broke exactly that way:
@@ -76,8 +76,8 @@ Picking your hunks out of a `git diff` **is not a substitute**. A hunk is a
 region, not a change: one hunk can hold your three lines and another patch's
 forty, and keeping it keeps both. That is precisely how `other/22` broke.
 
-For a file inside a nested git repo — `electron/`, `third_party/angle/`,
-`third_party/electron_node/` — `git diff` from `checkout/src` does not see it
+For a file inside a nested git repo (`electron/`, `third_party/angle/`,
+`third_party/electron_node/`), `git diff` from `checkout/src` does not see it
 at all. Either diff from inside that repo with the path rewritten:
 
 ```sh
@@ -93,14 +93,14 @@ git -C checkout/src apply --reverse --check <patch>   # matches the tree exactly
 ```
 
 That proves the patch describes what is there. It does **not** prove the patch
-applies in series order — only a build from scratch does, so run one before
+applies in series order; only a build from scratch does, so run one before
 trusting a new patch, or at least confirm the patch does not touch a file an
 earlier series already touches.
 
 A patch that fails `--reverse --check` on a fully patched tree is not
 necessarily broken: where two patches edit the same region, the earlier one can
 no longer be reversed once the later one is in. `other/12` and `other/14` are
-both in that state and are fine. The symptom to worry about is the opposite —
+both in that state and are fine. The symptom to worry about is the opposite:
 a patch that will not apply *forward* during a clean build.
 
 ## Header

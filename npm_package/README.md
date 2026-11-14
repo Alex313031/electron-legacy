@@ -2,7 +2,7 @@
 
 A drop-in replacement for the [`electron`](https://www.npmjs.com/package/electron)
 npm package that installs [electron-legacy](https://github.com/Alex313031/electron-legacy)
-builds — up-to-date Electron that still runs on Windows 7, 8 and 8.1.
+builds: up-to-date Electron that still runs on Windows 7, 8 and 8.1.
 
 The package is named `electron`, so `require('electron')`, the `electron` binary
 and anything that resolves the `electron` package keep working unchanged.
@@ -26,7 +26,7 @@ npm install
 npx electron .
 ```
 
-The binary downloads on first use rather than during `npm install` — the same as
+The binary downloads on first use rather than during `npm install`, the same as
 upstream Electron since v44. To fetch it ahead of time, run `npx install-electron`.
 
 ### Pointing somewhere else
@@ -46,8 +46,8 @@ which is what packaging tools set when they cross-package.
 ## What differs from upstream's package
 
 Almost nothing, which is the idea. `index.js` and `cli.js` are upstream's byte
-for byte. `install.js` differs by one option — `mirrorOptions`, pointing
-`@electron/get` at this project's releases instead of `electron/electron`'s —
+for byte. `install.js` differs by one option (`mirrorOptions`, pointing
+`@electron/get` at this project's releases instead of `electron/electron`'s)
 and `package.json` adds the name, description and other metadata that upstream
 fills in when it publishes.
 
@@ -90,7 +90,7 @@ whatever is there.
 
 The `v<version>` tag that consumers install carries this package at its root,
 because npm has no subdirectory support for git dependencies. It is produced
-with `git subtree split --prefix=npm_package`, so it is not the source tree —
+with `git subtree split --prefix=npm_package`, so it is not the source tree;
 that lives on the `v<version>-src` branch, which the release notes link to.
 
 ## License

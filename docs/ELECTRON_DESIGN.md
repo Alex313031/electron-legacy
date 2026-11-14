@@ -7,7 +7,7 @@ and how the pieces fit together at runtime.
 Written against the Electron **44.11.1** tree (Chromium 152.0.7977.169, Node
 v24.22.2). Specific line numbers are deliberately avoided; file paths and target
 names are given so you can go look. Everything here describes the *Electron*
-repo — not Chromium, and not this repo's own build scripts.
+repo, not Chromium, and not this repo's own build scripts.
 
 ---
 
@@ -21,7 +21,7 @@ repo — not Chromium, and not this repo's own build scripts.
 6. [The JavaScript build pipeline](#6-the-javascript-build-pipeline)
 7. [Node.js integration](#7-nodejs-integration)
 8. [Process model and startup](#8-process-model-and-startup)
-9. [The C++ ↔ JavaScript binding layer](#9-the-c--javascript-binding-layer)
+9. [The C++/JavaScript binding layer](#9-the-cjavascript-binding-layer)
 10. [The main-process object model](#10-the-main-process-object-model)
 11. [Renderer side: preload, context isolation, sandbox](#11-renderer-side-preload-context-isolation-sandbox)
 12. [IPC](#12-ipc)
@@ -35,14 +35,14 @@ repo — not Chromium, and not this repo's own build scripts.
 
 ## 1. The one-sentence version
 
-Electron is a Chromium embedder: it supplies its own
+Electron is a [Chromium](https://www.chromium.org/) embedder: it supplies its own
 `ContentMainDelegate`/`ContentBrowserClient`/`ContentRendererClient`
-implementations, links Node.js into the same processes, marries libuv's event
-loop to Chromium's message loop, and exposes the result to JavaScript through
-a set of `gin`-based native bindings plus a TypeScript layer compiled into the
-binary.
+implementations, links [Node.js](https://nodejs.org/) into the same processes,
+marries libuv's event loop to Chromium's message loop, and exposes the result
+to JavaScript through a set of `gin`-based native bindings plus a TypeScript
+layer compiled into the binary.
 
-It is *not* a library sitting on top of Chromium's public API — it lives inside
+It is *not* a library sitting on top of Chromium's public API; it lives inside
 the Chromium source tree as `src/electron`, participates in Chromium's GN
 build, and maintains a few hundred patches against its upstreams.
 
@@ -52,8 +52,8 @@ build, and maintains a few hundred patches against its upstreams.
 
 ```text
 electron/
-├── BUILD.gn              GN targets: electron_lib, electron_app, dist zips, …
-├── DEPS                  pins Chromium/Node/nan/…; declares gclient hooks
+├── BUILD.gn              GN targets: electron_lib, electron_app, dist zips, ...
+├── DEPS                  pins Chromium/Node/nan/...; declares gclient hooks
 ├── filenames*.gni        the actual source-file lists, split out of BUILD.gn
 ├── buildflags/           Electron's own GN args -> buildflags.h
 ├── build/                build templates and helper scripts (asar, tsc, webpack,
@@ -63,7 +63,7 @@ electron/
 ├── script/               Python/JS tooling (patches, release, lint, spec runner)
 ├── shell/                the C++ core
 │   ├── app/              process entry points + ContentMainDelegate
-│   ├── browser/          main process: APIs, windows, net, extensions, …
+│   ├── browser/          main process: APIs, windows, net, extensions, ...
 │   ├── renderer/         renderer process: clients, preload, context bridge
 │   ├── common/           shared: node bindings, gin helpers, asar, converters
 │   ├── services/node/    the Node utility-process service
@@ -133,7 +133,7 @@ deps = {
 }
 ```
 
-…Chromium lands at `src/`, Node at `src/third_party/electron_node`, and
+...Chromium lands at `src/`, Node at `src/third_party/electron_node`, and
 Electron itself is already at `src/electron`. The final layout:
 
 ```text
@@ -144,17 +144,17 @@ Electron itself is already at `src/electron`. The final layout:
     ├── third_party/
     │   ├── electron_node/        <- Node.js (its own git repo)
     │   ├── nan/
-    │   └── …all Chromium third_party…
-    └── …all of Chromium…
+    │   └── ...all Chromium third_party...
+    └── ...all of Chromium...
 ```
 
 Three directives make this work:
 
 | Directive | Effect |
 |---|---|
-| `recursedeps = ['src']` | After checking out Chromium, process *its* DEPS too — so all ~580 Chromium dependencies are fetched as normal. |
+| `recursedeps = ['src']` | After checking out Chromium, process *its* DEPS too, so all ~580 Chromium dependencies are fetched as normal. |
 | `gclient_gn_args_from = 'src'` | Take the GN args gclient derives from DEPS vars from Chromium's DEPS, not Electron's. |
-| `vars = { 'chromium_version': …, 'node_version': … }` | Electron pins the exact upstream revisions. Bumping Chromium is a one-line change plus however much patch refreshing it demands. |
+| `vars = { 'chromium_version': ..., 'node_version': ... }` | Electron pins the exact upstream revisions. Bumping Chromium is a one-line change plus however much patch refreshing it demands. |
 
 Because `src/` is a real Chromium checkout, everything Chromium-native works
 unchanged: `gn`, `autoninja`, `vpython3`, the `third_party/llvm-build` toolchain,
@@ -165,7 +165,7 @@ the checkout.** `checkout_chromium`, `checkout_node`, `checkout_nan`,
 `checkout_pyyaml`, `install_sysroot`, `apply_patches`, `use_mtime_cache`,
 `process_deps` are all gclient vars with sensible defaults that in-house
 builders are expected to override. Notably `checkout_pgo_profiles` defaults to
-**False** here — Electron does not consume Chrome's published PGO profiles,
+**False** here; Electron does not consume Chrome's published PGO profiles,
 because they can't describe Electron's code; it uses its own
 (`script/pgo/`, `build/pgo_profiles/`).
 
@@ -176,7 +176,7 @@ because they can't describe Electron's code; it uses its own
 | Hook | What it does |
 |---|---|
 | `generate_mtime_cache` (pre-deps) | Records mtimes of every file the patches touch, before the sync disturbs them. |
-| `patch_chromium` | Runs `script/apply_all_patches.py patches/config.json` — the whole patch system, see below. |
+| `patch_chromium` | Runs `script/apply_all_patches.py patches/config.json`: the whole patch system, see below. |
 | `apply_mtime_cache` | Restores those mtimes afterwards. |
 | `electron_npm_deps` | `yarn install --immutable` inside `src/electron`. |
 | `gen_siso_revision` | Writes `build/siso_revision` to match the Siso commit this Chromium pins. |
@@ -210,33 +210,33 @@ patches. 663 patches across 21 targets in this tree:
 | `devtools_frontend` | 8 | `src/third_party/devtools-frontend/src` |
 | `ffmpeg` | 4 | `src/third_party/ffmpeg` |
 | `fontconfig` | 3 | `src/third_party/fontconfig/src` |
-| `boringssl`, `libyuv`, `ReactiveObjC`, `squirrel.mac`, `webrtc` | 2 each | … |
-| `icu`, `libaom`, `libvpx`, `perfetto`, `sqlite` | 1 each | … |
+| `boringssl`, `libyuv`, `ReactiveObjC`, `squirrel.mac`, `webrtc` | 2 each | ... |
+| `icu`, `libaom`, `libvpx`, `perfetto`, `sqlite` | 1 each | ... |
 
 Do not trust those numbers for long. They are a snapshot of one point release,
 and the count climbs steeply within a release line as security fixes are
-backported: 44.10.2 → 44.11.1 added **136 patches** without moving the pinned
-Chromium or Node revision at all — `chromium` +70, `v8` +35, `angle` +8. Many
+backported: 44.10.2 -> 44.11.1 added **136 patches** without moving the pinned
+Chromium or Node revision at all: `chromium` +70, `v8` +35, `angle` +8. Many
 are literally named `cherry-pick-<sha>.patch`. The structure is what is stable
 here; the arithmetic is not.
 
 `patches/config.json` is the source of truth for which targets exist and where
 each applies, and each directory's `.patches` file for the order within it.
-Counting `*.patch` per `patch_dir` reproduces this table — note those paths are
+Counting `*.patch` per `patch_dir` reproduces this table; note those paths are
 relative to the gclient root, not to `src/electron`.
 
 ### Configuration
 
-`patches/config.json` is a flat list of `{patch_dir, repo}` pairs — that's the
+`patches/config.json` is a flat list of `{patch_dir, repo}` pairs; that's the
 entire mapping from a patch directory to the git repo it applies to.
 
 ### Ordering: the `.patches` file
 
 Each patch directory contains a `.patches` file listing filenames in apply
 order, one per line. Patch files are named for *what they do*
-(`build_gn.patch`, `feat_add_support_for_…`), **not numbered**. The docs explain
-why: numeric prefixes cause constant conflicts when two PRs each append a patch,
-and churn when one is inserted or deleted mid-series.
+(`build_gn.patch`, `feat_add_support_for_...`), **not numbered**. The docs
+explain why: numeric prefixes cause constant conflicts when two PRs each append
+a patch, and churn when one is inserted or deleted mid-series.
 
 By convention the filename prefix mirrors the commit-message prefix: `feat_`
 (25), `fix_` (42), `build_` (12), `chore_` (16), `refactor_` (6), `revert_` (4).
@@ -247,7 +247,7 @@ By convention the filename prefix mirrors the commit-message prefix: `feat_`
 
 - `script/lib/patches.py` concatenates the patch files in `.patches` order into
   one big mbox stream. As it goes it injects two trailers into each commit
-  message — `Patch-Dir:` and `Patch-Filename:` — immediately before the first
+  message (`Patch-Dir:` and `Patch-Filename:`) immediately before the first
   `diff -`/`---` line.
 - `script/lib/git.py` saves the current `HEAD` to a ref
   (`refs/patches/upstream-head`) so the export side knows where the patch series
@@ -277,7 +277,7 @@ patch range (`upstream-head..HEAD`), runs `git format-patch`, splits the result,
 rewrites both the patch files and `.patches`.
 
 A `--dry-run` mode compares what *would* be exported against what's on disk and
-exits non-zero on any mismatch — that's the CI check which ensures nobody edits
+exits non-zero on any mismatch; that's the CI check which ensures nobody edits
 the Chromium tree without exporting.
 
 ### Why patches at all
@@ -285,7 +285,7 @@ the Chromium tree without exporting.
 `docs/development/patches.md` is unusually explicit, and worth reading in full.
 It requires every patch to justify its existence as one of exactly three things:
 
-1. Temporary — intended to be upstreamed or removed (link the upstream CL).
+1. Temporary: intended to be upstreamed or removed (link the upstream CL).
 2. Needed to compile in the Electron environment and not upstreamable (e.g.
    removing references to Chrome's `Profile`).
 3. A deliberate Electron-specific behaviour change incompatible with upstream.
@@ -313,7 +313,7 @@ graph and everything follows from its deps.
 
 `is_electron_build` and `is_mas_build` are declared in Chromium's
 `build/config/BUILDCONFIG.gn` by `patches/chromium/build_gn.patch`, so they're
-visible in every GN file without an explicit import — that's the entire reason
+visible in every GN file without an explicit import; that's the entire reason
 for that patch.
 
 ### The target graph
@@ -333,7 +333,7 @@ group("electron")
     │       ├── :electron_js2c              the JS bundles as C++ arrays
     │       ├── :electron_fuses
     │       ├── :resources / :packed_resources
-    │       └── …a long list of //content, //components, //ui, //net, …
+    │       └── ...a long list of //content, //components, //ui, //net, ...
     └── :packed_resources                   .pak files
 
 group("electron_dist_zip")       the release zip
@@ -347,7 +347,7 @@ group("testing_build") / group("release_build")
 the platform entry point (`shell/app/electron_main_win.cc`,
 `electron_main_linux.cc`, `electron_main_mac.cc`) plus platform resources.
 
-On macOS the picture is more involved — the framework/helper-app bundle
+On macOS the picture is more involved: the framework/helper-app bundle
 structure means a pile of `bundle_data` targets, `electron_helper_app`
 templates, `stripped_framework`, lproj dirs and so on. On Windows and Linux it's
 a single executable plus data files.
@@ -370,7 +370,7 @@ Several things in `BUILD.gn` are code generators rather than compilation:
 
 | Target | Produces |
 |---|---|
-| `electron_js2c` | `electron_natives.cc` — the JS bundles as C++ byte arrays |
+| `electron_js2c` | `electron_natives.cc`, the JS bundles as C++ byte arrays |
 | `electron_fuses` | `fuses.h`/`fuses.cc` from `build/fuses/fuses.json5` |
 | `generate_config_gypi` | `config.gypi` so native modules see Node's build config |
 | `electron_version_args`, `electron_version_header` | version constants |
@@ -382,7 +382,7 @@ Several things in `BUILD.gn` are code generators rather than compilation:
 ### Version determination
 
 `BUILD.gn` prefers the `override_electron_version` GN arg. If it's empty it
-falls back to deriving the version from git — `script/get-git-ref-paths.py`
+falls back to deriving the version from git: `script/get-git-ref-paths.py`
 resolves the real locations of `HEAD` and `packed-refs` (so it works in a `git
 worktree`, where `.git` is a file), registers them as build inputs, and
 `script/get-git-version.py` runs `git describe --tags`. Source tarballs and
@@ -398,10 +398,10 @@ into the binary** as C++ string data, not shipped as files.
 The pipeline, per process type:
 
 ```text
-lib/<target>/init.ts  ──tsc + webpack──▶  <target>.bundle.js  ──js2c──▶  electron_natives.cc
-                                                                              │
+lib/<target>/init.ts  --tsc + webpack-->  <target>.bundle.js  --js2c-->  electron_natives.cc
+                                                                              |
                                                               linked into electron_lib
-                                                                              │
+                                                                              |
                                                     loaded at runtime as a builtin module
 ```
 
@@ -411,14 +411,14 @@ There is one webpack config per process type in `build/webpack/`:
 
 `webpack.config.browser.js`, `renderer.js`, `sandboxed_renderer.js`,
 `isolated_renderer.js`, `worker.js`, `utility.js`, `preload_realm.js`,
-`node.js` — each driven by the shared `webpack.config.base.js`, which takes
+`node.js`. Each is driven by the shared `webpack.config.base.js`, which takes
 flags describing the target environment:
 
-- `alwaysHasNode` — whether Node builtins are available
-- `targetDeletesNodeGlobals` — if so, `ProvidePlugin` re-supplies `Buffer`,
+- `alwaysHasNode`: whether Node builtins are available
+- `targetDeletesNodeGlobals`: if so, `ProvidePlugin` re-supplies `Buffer`,
   `global`, `process` from an internal shim
-- `loadElectronFromAlternateTarget` — which `api/exports/electron.ts` to use
-- `wrapInitWithProfilingTimeout`, `wrapInitWithTryCatch` — wrapper behaviour
+- `loadElectronFromAlternateTarget`: which `api/exports/electron.ts` to use
+- `wrapInitWithProfilingTimeout`, `wrapInitWithTryCatch`: wrapper behaviour
 
 Two details with real consequences:
 
@@ -440,7 +440,7 @@ otherwise `development`.
 bundles are registered in the same builtin-module table as Node's own internal
 JS, so the C++ side can `require()` them by name.
 
-Note `electron_js2c_toolchain` — on a cross build the generator must run on the
+Note `electron_js2c_toolchain`: on a cross build the generator must run on the
 host, so it's built in the host toolchain.
 
 There is also an optional V8 code-cache step
@@ -457,7 +457,7 @@ export const browserModuleList: ElectronInternal.ModuleEntry[] = [
   { name: 'app', loader: () => require('./app') },
   { name: 'BrowserWindow', loader: () => require('./browser-window') },
   { name: 'ipcMain', loader: () => require('./ipc-main') },
-  …
+  ...
 ];
 ```
 
@@ -476,15 +476,15 @@ GYP/`configure`-based, so Electron adds GN build files to it.
 
 Other notable node patch themes, from their filenames:
 
-- `build_allow_unbundling_of_node_js_dependencies` — use Chromium's zlib,
+- `build_allow_unbundling_of_node_js_dependencies`: use Chromium's zlib,
   BoringSSL etc. instead of Node's bundled copies (`node_openssl_path =
   "//third_party/boringssl"` in `build/args/all.gn`).
-- `build_modify_js2c_py_to_allow_injection_of_original-fs_and_custom_embedder_js`
-  — the hook Electron's own js2c step relies on.
+- `build_modify_js2c_py_to_allow_injection_of_original-fs_and_custom_embedder_js`:
+  the hook Electron's own js2c step relies on.
 - `electron_enable_node_startup_snapshot_generation_in_chromium_s_v8` and
-  `electron_build-time_v8_code_cache_for_the_electron_js2c_bundles` — startup
+  `electron_build-time_v8_code_cache_for_the_electron_js2c_bundles`: startup
   performance.
-- `chore_allow_the_node_entrypoint_to_be_a_builtin_module` — so Electron's
+- `chore_allow_the_node_entrypoint_to_be_a_builtin_module`: so Electron's
   bundled `init` can be the entry point.
 - A cluster of `api_*` patches tracking V8 API deprecations, which is the
   recurring cost of Node and Chromium pinning *different* V8 expectations while
@@ -499,12 +499,12 @@ Node is built around libuv's event loop; Chromium is built around its own
 `shell/common/node_bindings.{h,cc}`:
 
 - A dedicated **embed thread** (`EmbedThreadRunner`) does the blocking wait. It
-  loops: wait on a semaphore → call `PollEvents()` (which blocks in
+  loops: wait on a semaphore -> call `PollEvents()` (which blocks in
   `epoll`/`kqueue`/`GetQueuedCompletionStatus`, implemented per platform in
-  `node_bindings_linux.cc`, `_mac.cc`, `_win.cc`) → `WakeupMainThread()`.
+  `node_bindings_linux.cc`, `_mac.cc`, `_win.cc`) -> `WakeupMainThread()`.
 - `WakeupMainThread()` posts a task to Chromium's loop, which calls
-  `UvRunOnce()` — a single non-blocking `uv_run(UV_RUN_NOWAIT)` on the main
-  thread — then signals the semaphore to let the embed thread poll again.
+  `UvRunOnce()` (a single non-blocking `uv_run(UV_RUN_NOWAIT)` on the main
+  thread), then signals the semaphore to let the embed thread poll again.
 
 So **all libuv callbacks still run on the main thread**, inside a Chromium task;
 the extra thread only ever blocks in the poll syscall. A dummy `uv_async_t` is
@@ -520,17 +520,17 @@ runs.
 
 ### Where Node environments are created
 
-`NodeBindings::BrowserEnvironment` is `{ kBrowser, kRenderer, kUtility, kWorker }`
-— one `NodeBindings` subclass behaviour per process type. The main-process
+`NodeBindings::BrowserEnvironment` is `{ kBrowser, kRenderer, kUtility, kWorker }`:
+one `NodeBindings` subclass behaviour per process type. The main-process
 sequence, in `ElectronBrowserMainParts::PostEarlyInitialization()`:
 
 1. Optionally install the WebAssembly trap handler (fuse-gated), *before* the
    isolate exists, since V8 latches that decision.
-2. Create `JavascriptEnvironment` — the V8 isolate, with Electron's own
+2. Create `JavascriptEnvironment`: the V8 isolate, with Electron's own
    `MicrotasksRunner` rather than V8's default microtask policy.
 3. `node_bindings_->Initialize(isolate, context)`.
-4. `node_bindings_->CreateEnvironment(...)` → the `node::Environment`.
-5. `electron_bindings_->BindTo(isolate, node_env_->process_object())` — add the
+4. `node_bindings_->CreateEnvironment(...)` -> the `node::Environment`.
+5. `electron_bindings_->BindTo(isolate, node_env_->process_object())`: add the
    Electron-specific `process` properties.
 6. Set `unhandled_rejections = "warn-with-error-code"`, so an unhandled
    rejection doesn't kill the main process.
@@ -543,7 +543,7 @@ handles an initially-empty context and enters it afterwards.
 `shell/browser/javascript_environment.cc` decides whether to use the embedded
 snapshot at all: `NodeSnapshotForThisProcess()` returns the embedded snapshot
 only in the browser process, `ELECTRON_RUN_AS_NODE` children, and the utility
-process hosting the node service — and only if the loaded V8 blob is the one
+process hosting the node service, and only if the loaded V8 blob is the one
 this build shipped (checked against build-time constants, not by hashing at
 startup). If a custom `electron-mksnapshot` blob is loaded, it falls back to
 bootstrapping Node from scratch, because the embedded Node snapshot was built on
@@ -561,7 +561,7 @@ process types.
 | **browser** (main) | yes, full | Runs the app's `main` script. One per app. |
 | **renderer** | optional | Node only if `nodeIntegration` and not sandboxed; preload runs regardless. |
 | **utility** | yes, for the node service | `utilityProcess` API; `shell/services/node/`. |
-| **GPU / network / …** | no | Stock Chromium service processes. |
+| **GPU / network / ...** | no | Stock Chromium service processes. |
 | **crashpad handler** | no | Re-entry into the same binary. |
 | **relauncher** | no | Electron-specific, for `app.relaunch()`. |
 | **ELECTRON_RUN_AS_NODE** | it *is* node | Plain Node, no Chromium. |
@@ -577,11 +577,11 @@ Taking Windows (`shell/app/electron_main_win.cc`) as the example, `wWinMain`:
    cost. `electron_app` correspondingly sets a 0.5 MiB initial stack on x86.
 2. Initialise `base::CommandLine` and Electron's own saved copy
    (`ElectronCommandLine`).
-3. If the `run_as_node` fuse is enabled **and** `ELECTRON_RUN_AS_NODE` is set →
+3. If the `run_as_node` fuse is enabled **and** `ELECTRON_RUN_AS_NODE` is set ->
    `electron::NodeMain()` and nothing Chromium-related happens at all.
-4. If `--type=crashpad-handler` → run as the Crashpad handler, optionally with
+4. If `--type=crashpad-handler` -> run as the Crashpad handler, optionally with
    an `ExitCodeWatcher` on the parent.
-5. Otherwise → `content::ContentMain` with `ElectronMainDelegate`.
+5. Otherwise -> `content::ContentMain` with `ElectronMainDelegate`.
 
 Linux and macOS have the same shape minus the fiber and Crashpad specifics;
 macOS additionally has the helper-app and login-helper entry points.
@@ -594,12 +594,12 @@ macOS additionally has the helper-app and login-helper entry points.
 | Override | Role |
 |---|---|
 | `BasicStartupComplete` | Early command-line/logging setup. |
-| `PreSandboxStartup` | Load resources, set up crash reporting — before the sandbox closes. |
+| `PreSandboxStartup` | Load resources and set up crash reporting, before the sandbox closes. |
 | `PreBrowserMain` | Last hook before browser main. |
 | `PostEarlyInitialization` | Where the browser's `BrowserMainParts` work happens. |
 | `CreateContentClient` / `CreateContentGpuClient` | Electron's `ContentClient`, GPU client. |
 | `RunProcess` | Intercepts the `relauncher` process type; everything else falls through to content. |
-| `ShouldCreateFeatureList` / `ShouldInitializeMojo` | **Only in child processes** — the browser process does these itself, later, because Node must be initialised first. |
+| `ShouldCreateFeatureList` / `ShouldInitializeMojo` | **Only in child processes**: the browser process does these itself, later, because Node must be initialised first. |
 | `ShouldLoadV8Snapshot`, `GetBrowserV8SnapshotFilename` | Snapshot selection, including the browser-specific-snapshot fuse. |
 | `InitializeMemorySystem` | PartitionAlloc configuration. |
 
@@ -609,14 +609,14 @@ macOS additionally has the helper-app and login-helper entry points.
 for Electron, and its ordering is where Node and Chromium are interleaved:
 
 ```text
-PreEarlyInitialization   → field trials, prefs
-PostEarlyInitialization  → V8 isolate, Node environment, Electron bindings
-PreCreateThreads         → screen/display init, locale
-PostCreateThreads        → …
-PreMainMessageLoopRun    → create Browser, run the app's main script
-WillRunMainMessageLoop   → hand the run loop to Electron
-PostMainMessageLoopRun   → teardown
-PostDestroyThreads       → final cleanup
+PreEarlyInitialization   -> field trials, prefs
+PostEarlyInitialization  -> V8 isolate, Node environment, Electron bindings
+PreCreateThreads         -> screen/display init, locale
+PostCreateThreads        -> ...
+PreMainMessageLoopRun    -> create Browser, run the app's main script
+WillRunMainMessageLoop   -> hand the run loop to Electron
+PostMainMessageLoopRun   -> teardown
+PostDestroyThreads       -> final cleanup
 ```
 
 The app's JavaScript entry point is reached from `PreMainMessageLoopRun`, by
@@ -628,10 +628,10 @@ loading the `browser_init` bundle, which then resolves and runs the user's
 The main-process bootstrap, worth skimming because it explains several
 observable behaviours:
 
-- `process.argv.splice(1, 1)` — drops the app path so `process.argv` looks like
+- `process.argv.splice(1, 1)`: drops the app path so `process.argv` looks like
   a normal Node script's.
 - Installs a default `uncaughtException` handler that shows a native error
-  dialog — but only if the app hasn't added its own listener.
+  dialog, but only if the app hasn't added its own listener.
 - Overrides `process.exit` to route through `app.exit`, so Chromium shuts down
   properly.
 - On Windows, if an `update.exe` sits next to the binary (the Squirrel layout),
@@ -644,12 +644,12 @@ observable behaviours:
 
 ---
 
-## 9. The C++ ↔ JavaScript binding layer
+## 9. The C++/JavaScript binding layer
 
 ### Two mechanisms
 
 **1. Builtin bindings.** C++ modules register themselves with Node's builtin
-table via `NODE_LINKED_BINDING_CONTEXT_AWARE(name, Initialize)` — there are 54
+table via `NODE_LINKED_BINDING_CONTEXT_AWARE(name, Initialize)`; there are 54
 of them in this tree, named `electron_browser_*`, `electron_renderer_*`,
 `electron_common_*`, `electron_utility_*`. JavaScript reaches them with
 `process._linkedBinding('electron_browser_app')`. `NodeBindings::
@@ -667,7 +667,7 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
   gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
       .SetMethod("show", &BaseWindow::Show)
       .SetMethod("isVisible", &BaseWindow::IsVisible)
-      …
+      ...
 }
 ```
 
@@ -688,8 +688,8 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
 | `locker` | `v8::Locker` discipline where Node and Chromium both touch the isolate |
 
 Type conversion is `gin::Converter<T>` specialisations, in
-`shell/common/gin_converters/` — a file per type family (`net`, `gfx`,
-`file_path`, `value`, `image`, `callback`, …). That's the layer that lets a
+`shell/common/gin_converters/`, a file per type family (`net`, `gfx`,
+`file_path`, `value`, `image`, `callback`, ...). That's the layer that lets a
 method signature like `void SetBounds(const gfx::Rect&)` be called from JS with
 a plain object.
 
@@ -717,9 +717,9 @@ Key abstractions in `shell/browser/`:
 
 | Class | Role |
 |---|---|
-| `Browser` | The app singleton — lifecycle, activation, dock/taskbar. Backs the `app` module. |
+| `Browser` | The app singleton: lifecycle, activation, dock/taskbar. Backs the `app` module. |
 | `ElectronBrowserClient` | Electron's `ContentBrowserClient` (~2100 lines). The main place Chromium asks "what should happen here?" and Electron answers. |
-| `ElectronBrowserContext` | A `BrowserContext` — i.e. a `session`. Multiple can exist; partitions and in-memory sessions are contexts. |
+| `ElectronBrowserContext` | A `BrowserContext`, i.e. a `session`. Multiple can exist; partitions and in-memory sessions are contexts. |
 | `WebContents` (`api/electron_api_web_contents.cc`) | The biggest single file (~5300 lines). Wraps `content::WebContents` and exposes the whole page-level API. |
 | `NativeWindow` + `NativeWindowViews` / `NativeWindowMac` | Platform window abstraction behind `BrowserWindow`. `views` on Windows/Linux, Cocoa on macOS. |
 | `InspectableWebContents` | Hosts DevTools for a `WebContents`. |
@@ -744,7 +744,7 @@ depends on configuration:
 |---|---|
 | `RendererClientBase` | Shared base. |
 | `ElectronRendererClient` | Unsandboxed renderer with Node integration. |
-| `ElectronSandboxedRendererClient` | Sandboxed renderer — no Node, preload only. |
+| `ElectronSandboxedRendererClient` | Sandboxed renderer: no Node, preload only. |
 | `WebWorkerObserver` | Node in a Web Worker. |
 | `ServiceWorkerData` | Service worker support. |
 | `preload_realm_context` | The separate V8 realm for sandboxed preloads. |
@@ -757,12 +757,12 @@ environment appears. Roughly:
 1. Decide whether this frame should load a preload at all (main frame, or a
    devtools extension, or subframe support explicitly enabled).
 2. First time only: `node_bindings_->Initialize` + `SetUpIsolate`. There's a
-   detail here worth noting — `SetUpIsolate` installs Node's WebAssembly
+   detail here worth noting: `SetUpIsolate` installs Node's WebAssembly
    streaming callback, whose JS half never gets installed in a renderer, so
    Blink's is explicitly reinstated with
    `blink::WasmResponseExtensions::Initialize`.
 3. `node::InitializeContext(renderer_context)`.
-4. **Defer the frame's body load**, run the preload, then undefer — so an async
+4. **Defer the frame's body load**, run the preload, then undefer, so an async
    or ESM preload isn't racing the document.
 
 ### Context isolation and the context bridge
@@ -771,10 +771,10 @@ With `contextIsolation` on (the default), the preload runs in a *separate V8
 context* from the page. `shell/renderer/api/electron_api_context_bridge.cc` is
 the machinery for moving values between those contexts:
 
-- `ExposeAPIInWorld` — the `contextBridge.exposeInMainWorld` implementation.
-- `PassValueToOtherContext` — deep-copies primitives/arrays/objects across the
+- `ExposeAPIInWorld`: the `contextBridge.exposeInMainWorld` implementation.
+- `PassValueToOtherContext`: deep-copies primitives/arrays/objects across the
   context boundary.
-- `CreateProxyForAPI` — for functions and objects with behaviour, creates a
+- `CreateProxyForAPI`: for functions and objects with behaviour, creates a
   proxy in the target context that calls back into the source context.
 
 The point is that no object reference ever crosses: the page gets proxies and
@@ -802,7 +802,7 @@ interface ElectronRenderer {            browser -> renderer
   TakeHeapSnapshot(handle file) => (bool success);
 };
 
-interface ElectronApiIPC { … }          renderer -> browser
+interface ElectronApiIPC { ... }        renderer -> browser
 interface ElectronFrameStartup {        browser -> renderer, once
   SetStartupData(RendererStartupData data);
 };
@@ -814,11 +814,11 @@ Points of interest:
   IPC (`ipcRendererInternal` / `ipcMainInternal`, used by `<webview>`, window
   setup, the guest view manager) from app IPC (`ipcRenderer` / `ipcMain`). Both
   ride the same pipe; the flag keeps app code from seeing internal traffic.
-- **`SerializedValue`** carries a `BigBuffer` — arguments are serialised with
+- **`SerializedValue`** carries a `BigBuffer`; arguments are serialised with
   V8's structured-clone, not JSON, which is why `ipcRenderer.send` supports
   `Map`, `Set`, `ArrayBuffer` and so on but not functions.
 - **`RendererStartupData`** delivers preload scripts *with their contents and
-  code cache* at startup, rather than having the renderer read files itself —
+  code cache* at startup, rather than having the renderer read files itself:
   important for sandboxed renderers, which can't.
 - `MessagePortMain` / `postMessage` use Blink's `TransferableMessage`, so real
   `MessagePort` transfer works.
@@ -836,13 +836,13 @@ JS-side dispatch lives in `lib/browser/ipc-dispatch.ts`,
 
 ### ASAR
 
-ASAR is Electron's archive format — a concatenated blob with a JSON header.
+ASAR is Electron's archive format: a concatenated blob with a JSON header.
 `shell/common/asar/` implements reading it, and crucially **integrates it into
 Node's `fs`**: `asar_util.cc` plus Node-side patches make
 `require('/path/app.asar/index.js')` and `fs.readFileSync` inside an archive
 work transparently.
 
-`archive.cc` also supports integrity checking — `integrity_digest.h` and the
+`archive.cc` also supports integrity checking; `integrity_digest.h` and the
 `embedded_asar_integrity_validation` fuse let a packaged app verify its archive
 against a build-time hash. `scoped_temporary_file.cc` exists because some
 platform APIs need a real file path, so files are extracted on demand.
@@ -886,23 +886,23 @@ feature bits:
 `kFuseWire` byte array prefixed with a sentinel string
 (`dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX`). Because the sentinel is findable in the
 binary, tooling (`@electron/fuses`) can flip fuses in an *already built*
-Electron without rebuilding — that's how app packagers harden a distribution.
+Electron without rebuilding; that's how app packagers harden a distribution.
 C++ reads them as `electron::fuses::IsRunAsNodeEnabled()` etc.
 
 The schema comment is emphatic that fuses must never be removed or redefined,
-only marked removed — the wire format is a compatibility surface.
+only marked removed; the wire format is a compatibility surface.
 
 ---
 
 ## 14. Docs as a source of truth
 
-`docs/api/*.md` (78 files) is not just prose — it's parsed:
+`docs/api/*.md` (78 files) is not just prose; it's parsed:
 
 ```text
-docs/api/*.md ──electron-docs-parser──▶ electron-api.json
-                                              │
+docs/api/*.md --electron-docs-parser--> electron-api.json
+                                              |
                             electron-typescript-definitions
-                                              │
+                                              |
                                         electron.d.ts
 ```
 
@@ -920,7 +920,7 @@ exist. `docs/development/creating-api.md` describes the full checklist.
 
 ## 15. Tests
 
-`spec/` is the main suite — Mocha + Chai + Sinon, 82 top-level `*-spec.ts`
+`spec/` is the main suite: Mocha + Chai + Sinon, 82 top-level `*-spec.ts`
 files plus fixtures and helpers, run by
 `script/spec-runner.js` against a built Electron. Tests run *inside* Electron,
 so they exercise real windows, real IPC and real sessions.
@@ -941,7 +941,7 @@ The `dist_zip` template in `BUILD.gn` produces the release set:
 
 | Target | Contents |
 |---|---|
-| `electron_dist_zip` | the app itself — binary, resources, locales, licenses |
+| `electron_dist_zip` | the app itself: binary, resources, locales, licenses |
 | `electron_chromedriver_zip` | ChromeDriver built against this Electron |
 | `electron_mksnapshot_zip` | `mksnapshot` + `v8_context_snapshot_generator`, so apps can build custom V8 snapshots |
 | `electron_ffmpeg_zip` | a codec-free `ffmpeg` built with `build/args/ffmpeg.gn` |
@@ -953,7 +953,7 @@ The `dist_zip` template in `BUILD.gn` produces the release set:
 `script/zip_manifests/` holds expected zip contents so CI can detect accidental
 additions or removals.
 
-What consumers install from npm is just `npm/` — a ~4-file package whose
+What consumers install from npm is just `npm/`, a ~4-file package whose
 `install.js` uses `@electron/get` to download the matching
 `electron-v<version>-<platform>-<arch>.zip` from the GitHub release and unpack
 it. The npm package contains no Electron binary itself.
@@ -976,14 +976,14 @@ If you remember five things:
 3. **The build is Chromium's build.** `root_extra_deps = [ "//electron" ]` is
    the whole hook. `electron_lib` is the body, `electron_app` is the executable,
    and Electron's TypeScript is compiled into the binary as C++ byte arrays via
-   webpack → js2c.
+   webpack -> js2c.
 
 4. **Node and Chromium share a thread by cooperating, not by one winning.** A
    dedicated thread blocks in libuv's poll; the main thread runs
    `uv_run(UV_RUN_NOWAIT)` inside a Chromium task when woken. All callbacks,
    both sides, run on the main thread.
 
-5. **Every API exists in three or four places at once** — `docs/api/*.md` (which
+5. **Every API exists in three or four places at once**: `docs/api/*.md` (which
    generates the types), `lib/*/api/*.ts` (ergonomics), `shell/*/api/*.cc`
    (implementation), and often a platform file under `shell/browser/`. Changing
    one usually means touching several.
@@ -998,7 +998,7 @@ If you remember five things:
 | What's in the checkout and why? | `docs/development/source-code-directory-structure.md` |
 | How do I add an API? | `docs/development/creating-api.md` |
 | What are the build args? | `build/args/*.gn`, `buildflags/buildflags.gni` |
-| How does startup work? | `shell/app/electron_main_<platform>.cc` → `electron_main_delegate.cc` → `shell/browser/electron_browser_main_parts.cc` |
+| How does startup work? | `shell/app/electron_main_<platform>.cc` -> `electron_main_delegate.cc` -> `shell/browser/electron_browser_main_parts.cc` |
 | How is Node attached? | `shell/common/node_bindings.{h,cc}` |
 | What does the JS bootstrap do? | `lib/browser/init.ts`, `lib/renderer/init.ts` |
 | How does IPC serialise? | `shell/common/api/api.mojom`, `lib/browser/ipc-dispatch.ts` |
