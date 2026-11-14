@@ -10,9 +10,10 @@
 </head>
 <body>
     <h1 class="center underline">Electron Legacy Self Test</h1>
-    <p class="hint intro italic center">Everything below is measured on this machine at load. See
+    <p class="hint intro italic">Everything below is measured on this machine at load. See
     <strong>Tools</strong> for <code>chrome://gpu</code>, <code>chrome://media-internals</code> and 
     main process debugger.</p>
+    <hr class="separator">
 
     <section>
         <h2>Build</h2>
@@ -62,9 +63,13 @@
         MSE is checked separately because a codec can be decodable for playback
         and still be refused by Media Source Extensions.</p>
         <table class="facts" id="codec-table">
+          <thead class="table-head">
             <tr><th>Codec</th><th>canPlayType</th><th>MSE</th></tr>
+          </thead>
+          <tbody class="table-body">
+          </tbody>
         </table>
-
+        <hr class="small-separator">
         <h3 class="sub">Widevine</h3>
         <p class="hint">Encrypted media needs a CDM, which this build does not
         bundle: <code>patches/other/14</code> loads one from
@@ -74,11 +79,15 @@
         CDM, so if it also fails then EME itself is unavailable and the
         Widevine rows say nothing.</p>
         <table class="facts">
-            <tr><th>--widevine-cdm-path</th><td id="cdm-path">&mdash;</td></tr>
+            <tr><th><code>--widevine-cdm-path</code></th><td id="cdm-path">&mdash;</td></tr>
             <tr><th>CDM present on disk</th><td id="cdm-present">&mdash;</td></tr>
         </table>
         <table class="facts" id="widevine-table">
+          <thead class="table-head">
             <tr><th>Key system</th><th>Access</th></tr>
+          </thead>
+          <tbody class="table-body">
+          </tbody>
         </table>
     </section>
 

@@ -3,7 +3,7 @@
   "appName": "Electron Legacy Test",
   "productName": "Electron Legacy Test",
   "applicationId": "com.alex313031.electron-legacy-sample",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A sample Electron app for demonstrating and testing Electron Legacy.",
   "author": "Alex313031",
   "license": "BSD-3-Clause",

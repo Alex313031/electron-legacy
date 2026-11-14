@@ -3,20 +3,26 @@
   --fg: #fff;
   --bg: #26282e;
   --panel: #2f3241;
-  --rule: #4a4d52;
+  --line: #4a4d52;
   --dim: #ddd;
-  --good: #77dd77;
+  --good: #77cc77;
   --bad: #ff6c6c;
+  --shadow: #ccc;
+  --highlight: #bbb;
+  --pre: #00bbbb;
 }
 @media (prefers-color-scheme: light) {
   :root {
     --fg: #000;
     --bg: #eeeeee;
-    --panel: #f3f3f4;
-    --rule: #d6d7d9;
-    --dim: #454545;
-    --good: #13bb33;
-    --bad: #dd221f;
+    --panel: #e3e3e3;
+    --line: #c3c3c3;
+    --dim: #444;
+    --good: #00bb00;
+    --bad: #dd0000;
+    --shadow: #333;
+    --highlight: #fff;
+    --pre: #000080;
   }
 }
 
@@ -78,9 +84,10 @@ h3 {
 section {
   margin-top: 18px;
   padding: 12px 14px;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
+  box-shadow: 1px 1px 3px 0 var(--shadow);
 }
 
 .hint {
@@ -89,15 +96,33 @@ section {
   color: var(--dim);
 }
 
+/* Ruled tables, rounded at the table's four outer corners.
+   border-collapse: collapse would merge adjacent cell borders into single
+   clean lines, but it also makes the browser drop border-radius on the table,
+   so the lines are built out of cell borders instead: the table draws the
+   outer ring, and each cell draws only the line above it and the line to its
+   left. Nothing then reaches the four corners except the table's own border,
+   which is what keeps the radius on the table rather than on any cell. */
 .facts {
-  border-collapse: collapse;
   width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+/* Two of these sit one after the other in the Widevine panel, where they would
+   otherwise meet with no gap between the boxes. */
+.facts + .facts {
+  margin-top: 10px;
 }
 .facts th,
 .facts td {
-  padding: 3px 10px 3px 0;
+  /* Symmetric, because text now sits between two lines rather than against
+     the panel on its left. */
+  padding: 4px 10px;
   text-align: left;
   vertical-align: top;
+  border-top: 1px solid var(--line);
 }
 .facts th {
   width: 15em;
@@ -109,6 +134,38 @@ section {
   font-family: monospace;
   overflow-wrap: anywhere;
 }
+/* Header labels only. The row labels in a .facts table are <th> too, and keep
+   the lighter weight above. */
+.table-head th {
+  font-weight: bold;
+}
+/* The About window's table. Narrower labels, because the window is a third
+   the width of the test page and 15em would spend half of it on the label
+   column. Here rather than with the rest of the .about rules so it still comes
+   before the more specific first-row reset below. */
+.about .facts th {
+  width: 9em;
+}
+/* Column lines: every cell except the first in its row. */
+.facts tr > *:not(:first-child) {
+  border-left: 1px solid var(--line);
+}
+/* The table's own border already draws the top edge, so the table's first row
+   must not add a second line under it. A thead, where there is one, is always
+   the table's first child; rows written as direct children of <table> are
+   wrapped in a tbody by the parser, so between them these cover every table in
+   index.html. The first row of a tbody that follows a thead keeps its border,
+   which is the line under the header.
+
+   Last in this group on purpose: it is the most specific rule here, and
+   stylelint's no-descending-specificity wants the generic selectors to come
+   first. */
+.facts > thead:first-child > tr:first-child > th,
+.facts > thead:first-child > tr:first-child > td,
+.facts > tbody:first-child > tr:first-child > th,
+.facts > tbody:first-child > tr:first-child > td {
+  border-top: 0;
+}
 
 /* Table rows that carry a pass/fail answer rather than a plain value. */
 .yes { color: var(--good); }
@@ -117,10 +174,11 @@ section {
 pre {
   margin: 0;
   padding: 8px 10px;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--bg);
   font: 12px/1.45 monospace;
+  color: var(--pre);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -137,6 +195,46 @@ code {
   text-align: center;
 }
 
+/* The page's one-paragraph introduction. A max-width alone leaves the block
+   pinned to the left with its text centred inside it, which reads as neither
+   centred nor justified -- the auto side margins are what actually centre it.
+   68ch is a readable measure, so it wraps rather than running the width of the
+   window. Keeps the 10px bottom margin .hint sets, and does its own
+   text-align, so it must not also carry .center (whose max-width: 100% is what
+   the !important here used to be fighting). */
 .intro {
-  max-width: 68ch !important;
+  max-width: 68ch;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+}
+
+/* The About window. A small fixed window with nothing to compare row by row,
+   so everything is centred rather than ranged left like the test page. The
+   table is the exception: version numbers still want a column to line up in,
+   so it keeps its own alignment and is centred as a block instead. */
+.about {
+  text-align: center;
+}
+.about .facts {
+  text-align: left;
+}
+.about-icon {
+  display: block;
+  margin: 4px auto 10px;
+}
+
+/* hr styles */
+.separator,
+.small-separator {
+  border: none;
+  border-top: 1px solid var(--highlight);
+  border-bottom: 1px solid var(--line);
+  width: 98%;
+  margin: 1em auto;
+}
+
+.small-separator {
+  width: 75% !important;
+  margin-left: 0 !important;
 }

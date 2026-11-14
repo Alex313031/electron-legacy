@@ -80,11 +80,7 @@ async function createWindow() {
   }
   store.delete('relaunch.windowDetails');
 
-  if (store.get('options.useLightMode')) {
-    nativeTheme.themeSource = 'light';
-  } else {
-    nativeTheme.themeSource = 'dark';
-  }
+  applyTheme();
 
   const mainURL = url.format({
     protocol: 'file',
@@ -242,13 +238,13 @@ ipcMain.handle('get-test-facts', () => {
 function readCdmPresence() {
   const cdmPath = app.commandLine.getSwitchValue('widevine-cdm-path');
   if (!cdmPath) {
-    return 'n/a';
+    return 'N/A';
   }
   try {
     const stat = fs.statSync(cdmPath);
-    return stat.isDirectory() ? 'yes, a directory' : 'yes, a file';
+    return stat.isDirectory() ? 'Yes - directory' : 'Yes - file';
   } catch (error) {
-    return 'no (' + (error.code || error.message) + ')';
+    return 'No (' + (error.code || error.message) + ')';
   }
 }
 
@@ -261,7 +257,7 @@ function readAeroGlass() {
   }
   try {
     if (typeof systemPreferences.isAeroGlassEnabled !== 'function') {
-      return 'not a function (is patches/other/10 applied?)';
+      return 'isAeroGlassEnabled() is not a function! (is patches/other/10 applied?)';
     }
     return systemPreferences.isAeroGlassEnabled();
   } catch (error) {
@@ -370,6 +366,32 @@ app.on('restart-confirm', () => {
       app.emit('restart');
     }
   });
+});
+
+// Pushes options.useLightMode at Chromium.
+//
+// nativeTheme.themeSource is a live override rather than a startup choice: set
+// it and Chromium hands the new preference to every renderer, so the
+// prefers-color-scheme queries in main.css re-evaluate where they stand and
+// nothing has to reload. That matters here beyond taste, because a reload would
+// throw away a page whose whole content was measured once at load.
+//
+// What a restart still changes is the GTK window variant, which comes from
+// BrowserWindow's darkTheme option and is fixed when the window is created.
+// That is the Linux title bar only, never the page.
+function applyTheme() {
+  nativeTheme.themeSource = store.get('options.useLightMode') ? 'light' : 'dark';
+}
+
+app.on('theme-changed', () => {
+  applyTheme();
+  // A Menu is a snapshot of the labels it was built with, and this one reads
+  // "Use Dark Mode" or "Use Light Mode" depending on which way the setting
+  // currently points -- so it has to be rebuilt for the label to follow. Safe
+  // whatever state the window is in: menu.js never touches the mainWindow it
+  // is handed, it asks for the focused window when it needs one.
+  Menu.setApplicationMenu(mainMenu(app, mainWindow, store));
+  electronLog.info('Theme switched to ' + nativeTheme.themeSource);
 });
 
 app.on('toggle-menubar', () => {
@@ -512,19 +534,6 @@ function buildTrayMenu() {
       }
     },
     { type: 'separator' },
-    {
-      // Replacing the image is NIM_MODIFY. Cheap, and it fails visibly if the
-      // icon handle was not kept correctly.
-      label: 'Swap Icon',
-      click() {
-        if (!tray) return;
-        const other = isWin
-          ? path.join(__dirname, 'imgs/icon64.png')
-          : path.join(__dirname, 'imgs/icon.ico');
-        tray.setImage(other);
-        electronLog.info('Tray: swapped the icon to ' + other);
-      }
-    },
     {
       label: 'Destroy Tray',
       click() {

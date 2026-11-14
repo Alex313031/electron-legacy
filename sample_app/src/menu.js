@@ -1,6 +1,7 @@
 const { BrowserWindow, Menu, screen, shell } = require('electron');
 const path = require('path');
 const electronLog = require('electron-log');
+const { openAboutWindow } = require('./about.js'); // About window
 const { openMainProcessDevTools } = require('./inspector.js'); // Main process debugger
 const { defaultUserAgent } = require('./useragent.js'); // Chrome-shaped UA for pop-outs
 
@@ -171,7 +172,10 @@ module.exports = (app, mainWindow, store) => {
           } else {
             store.set('options.useLightMode', true);
           }
-          app.emit('restart-confirm');
+          // Applied on the spot rather than at the next start: app.js pushes
+          // it to nativeTheme, which every open page follows without
+          // reloading, and rebuilds this menu so the label flips with it.
+          app.emit('theme-changed');
         },
         checked: false
       },
@@ -369,8 +373,7 @@ module.exports = (app, mainWindow, store) => {
         label: 'About App',
         accelerator: 'Ctrl+Alt+A',
         click() {
-          // TODO: About dialog
-          electronLog.info('Opened About');
+          openAboutWindow(app, store);
         }
       }
     ]

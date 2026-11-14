@@ -23,8 +23,25 @@ const replaceText = (selector, text) => {
   if (element) element.innerText = text;
 };
 
+// Where a generated row belongs.
+//
+// `table.insertRow()` with no index does not append to the table body. It
+// appends to the parent of the table's *last* row, so once index.html has a
+// `<thead>`, the last row is the header row and every generated row lands
+// inside the header -- which leaves `<tbody>` empty and makes the header's
+// bold rule apply to all of them. Before the `<thead>` existed, the bare `<tr>`
+// was parser-wrapped into an implicit `<tbody>` and this happened to work.
+//
+// So ask for the body directly. `createTBody()` covers a table written without
+// one, which keeps this safe to call on any `.facts` table.
+const tableBody = (table) => table.tBodies[0] || table.createTBody();
+
 // Marks a cell good/bad as well as filling it, so the page can be read at a
 // glance instead of compared against what the values are supposed to be.
+//
+// The class name is lower case whatever the displayed text says. CSS class
+// selectors are case-sensitive in standards mode, so `yes` is the name
+// main.css styles and `Yes` is a class nothing matches.
 const replaceVerdict = (selector, text, good) => {
   const element = document.getElementById(selector);
   if (!element) return;
@@ -60,13 +77,21 @@ function fillCodecTable() {
                   typeof window.MediaSource.isTypeSupported === 'function';
 
   for (const codec of kCodecs) {
+    let verdict;
     // canPlayType returns '' (no), 'maybe' or 'probably'.
-    const verdict = probe.canPlayType(codec.mime) || 'no';
+    const canPlay = probe.canPlayType(codec.mime);
+    if (canPlay == 'maybe') {
+      verdict = 'Maybe';
+    } else if (canPlay == 'probably') {
+      verdict = 'Probably';
+    } else {
+      verdict = 'No';
+    }
     const mse = haveMse
-      ? (window.MediaSource.isTypeSupported(codec.mime) ? 'yes' : 'no')
-      : 'n/a';
+      ? (window.MediaSource.isTypeSupported(codec.mime) ? 'Yes' : 'No')
+      : 'N/A';
 
-    const row = table.insertRow();
+    const row = tableBody(table).insertRow();
     const name = document.createElement('th');
     name.innerText = codec.label;
     name.title = codec.mime;
@@ -74,11 +99,11 @@ function fillCodecTable() {
 
     const playCell = row.insertCell();
     playCell.innerText = verdict;
-    playCell.classList.add(verdict === 'no' ? 'no' : 'yes');
+    playCell.classList.add(verdict === 'No' ? 'no' : 'yes');
 
     const mseCell = row.insertCell();
     mseCell.innerText = mse;
-    if (mse !== 'n/a') mseCell.classList.add(mse === 'yes' ? 'yes' : 'no');
+    if (mse !== 'N/A') mseCell.classList.add(mse === 'Yes' ? 'yes' : 'no');
   }
 }
 
@@ -110,7 +135,7 @@ async function probeKeySystem(entry) {
     } ]);
     // Report the robustness actually granted, which can be weaker than asked.
     const granted = access.getConfiguration().videoCapabilities?.[0]?.robustness;
-    return { text: granted ? 'granted (' + granted + ')' : 'granted', good: true };
+    return { text: granted ? 'Granted (' + granted + ')' : 'Granted', good: true };
   } catch (error) {
     // A rejection is the normal answer with no CDM installed, so the name
     // matters more than the fact of failing: NotSupportedError means "no such
@@ -124,7 +149,7 @@ async function fillWidevineTable() {
   if (!table) return;
   for (const entry of kKeySystems) {
     const result = await probeKeySystem(entry);
-    const row = table.insertRow();
+    const row = tableBody(table).insertRow();
     const name = document.createElement('th');
     name.innerText = entry.label;
     name.title = entry.system + (entry.robustness ? ' / ' + entry.robustness : '');
@@ -147,10 +172,10 @@ function fillWebGl() {
     return;
   }
   if (!gl) {
-    replaceVerdict('webgl-status', 'unavailable', false);
+    replaceVerdict('webgl-status', 'Unavailable', false);
     return;
   }
-  replaceVerdict('webgl-status', 'available', true);
+  replaceVerdict('webgl-status', 'Available', true);
 
   // The plain VENDOR/RENDERER strings are masked to a generic value; the real
   // driver name needs this extension, which is what distinguishes a D3D9
@@ -171,11 +196,11 @@ function fillWebGl() {
   // but it has to say so rather than claim to have measured it. chrome://gpu
   // is the authority.
   if (!info) {
-    replaceText('webgl-hw', 'unknown (renderer string is masked)');
+    replaceText('webgl-hw', 'Unknown: (renderer string is masked)');
   } else {
     const software = /swiftshader|software|llvmpipe|basic render/i.test(renderer);
     replaceVerdict('webgl-hw',
-      software ? 'no, software rasterizer' : 'yes, by renderer name', !software);
+      software ? 'No, software rasterizer' : 'Yes, by renderer name', !software);
   }
 
   let gl2 = null;
@@ -184,7 +209,7 @@ function fillWebGl() {
   } catch {
     gl2 = null;
   }
-  replaceVerdict('webgl2-status', gl2 ? 'available' : 'unavailable', !!gl2);
+  replaceVerdict('webgl2-status', gl2 ? 'Available' : 'Unavailable', !!gl2);
 }
 
 // --- Main process facts ----------------------------------------------------
@@ -199,25 +224,25 @@ async function fillFromMainProcess() {
     replaceText('command-line', facts.commandLine.join('\n'));
 
     if (facts.aeroGlass === null) {
-      replaceText('aero-glass', 'n/a (not Windows)');
+      replaceText('aero-glass', 'N/A (not Windows)');
     } else if (typeof facts.aeroGlass === 'string') {
       replaceVerdict('aero-glass', 'missing: ' + facts.aeroGlass, false);
     } else {
       replaceVerdict('aero-glass', String(facts.aeroGlass), true);
     }
 
-    replaceText('cdm-path', facts.widevineCdmPath || 'not requested');
+    replaceText('cdm-path', facts.widevineCdmPath || 'Not requested');
     if (facts.widevineCdmPath) {
       replaceVerdict('cdm-present', facts.widevineCdmPresent,
-        facts.widevineCdmPresent.startsWith('yes'));
+        facts.widevineCdmPresent.startsWith('Yes'));
     } else {
-      replaceText('cdm-present', 'n/a');
+      replaceText('cdm-present', 'N/A');
     }
 
     if (facts.nativeModule.loaded) {
-      replaceVerdict('native-module', 'loaded (' + facts.nativeModule.detail + ')', true);
+      replaceVerdict('native-module', 'Loaded .node (' + facts.nativeModule.detail + ')', true);
     } else {
-      replaceVerdict('native-module', 'failed: ' + facts.nativeModule.detail, false);
+      replaceVerdict('native-module', 'Failed: ' + facts.nativeModule.detail, false);
     }
   } catch (error) {
     console.error('Could not read the main process facts: ' + error);
@@ -232,7 +257,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   replaceText('os-type', osType);
   replaceText('arch-type', process.arch);
   // process.sandboxed is set in a sandboxed renderer; absent means it is not.
-  replaceVerdict('sandboxed', process.sandboxed ? 'yes' : 'no', !!process.sandboxed);
+  replaceVerdict('sandboxed', process.sandboxed ? 'Yes' : 'No', !!process.sandboxed);
 
   fillCodecTable();
   fillWebGl();
