@@ -59,11 +59,11 @@
    ships when `use_winwrap` is on. The catch is that per-function dispatch would bind Vista's
    `AcquireSRWLock*` to the real kernel32 while `TryAcquireSRWLock*` falls back to ours -- the
    mixed state `static_redirects.cc` warns about. The SRWLOCK family would have to resolve as a group
- - Drop `patches/other/15-delayload-failure-diagnostics.patch` before shipping. It turns a silent
-   delay-load crash into a modal dialog naming the module; keep it while XP work continues. The
-   sandbox diagnostics in `patches/other/22-legacy-sandbox.patch` are worth keeping either way --
-   they only replace a DLOG that a release build discards, and a path that logs nothing at all,
-   so they cost one ERROR line on a failure that currently produces silence
+ - Keep the sandbox diagnostics in `patches/other/22-legacy-sandbox.patch`. Unlike the delay-load
+   dialog that was dropped for the 44.11.3 release, they only replace a DLOG a release build
+   discards, and a path that logs nothing at all, so they cost one ERROR line on a failure that
+   currently produces silence. `patches/other/` leaves 15 unused rather than renumbering, because
+   16 and 19-22 are cited by name in the docs and in sample_app
  - The Vista GPU process recovers after crashing -- the console shows "Reinitialized the GPU
    process after a crash" -- so the D3D9 path is reachable there but not clean. Covered by the
    GPU item above; this is the symptom to look for
@@ -88,11 +88,11 @@
    link. Either a small fetcher against the component-update endpoint, or a real
    `ComponentUpdateService`. L1/L2 stays out of reach either way without VMP signing certs
  - Add standalone NodeJS XP/Vista patch for libuv functions (still requires an XP compatible CRT)
- - Handle the Chromium pin actually moving. `cache_chromium_tag` in `build.sh` stops gclient's
-   all-refs fetch of chromium/src -- the one that hangs at 574 KB rather than finishing -- only
-   when the pinned version hasn't changed, which is the normal case for an Electron patch release.
-   A real Chromium roll still goes through gclient's fetch and can still hang there. The targeted
-   version is a single `git fetch origin refs/tags/<ver>:refs/tags/<ver>`, whose `ref-prefix` is
-   filtered server-side, but it has to know the new pin before gclient updates `src/electron` --
-   so it means reading `DEPS` at `refs/tags/v<electron>` from GitHub first
+ - Handle the Chromium pin actually moving. `pin_chromium_sha` in `build.sh` stops gclient
+   fetching chromium/src only when the pinned version has not changed, which is the normal case
+   for an Electron patch release. gclient's test is `IsValidRevision(..., sha_only=True)`, which
+   accepts nothing but a 40 character commit id, so there is no way to satisfy it for a version
+   that is not already checked out -- a real roll has to do the fetch. On this network that fetch
+   pulled ~90 GB across repeated attempts and then stalled, probably into throttling, so a roll is
+   worth attempting on a clean connection rather than retried in place
  - Log winwrap version from Electron when building with it
