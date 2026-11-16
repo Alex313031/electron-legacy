@@ -10,12 +10,12 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.6"
+SCRIPTVER="1.3.7"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Electron release the patches in patches/ are made for.
-ELECTRON_VERSION="44.11.1"
+ELECTRON_VERSION="44.11.3"
 
 # The gclient root: .gclient and the state files beside it (.gclient_entries,
 # .cipd/, .gcs_entries), plus src/, dist/ and build.log. Kept in a subdirectory
@@ -710,6 +710,90 @@ reset_sources() {
   log "${GRE} %s is back to stock${c0}\n" "$SRC_PATH"
 }
 
+pin_chromium_sha() {
+  # Stop gclient re-fetching a Chromium that is already checked out.
+  #
+  # Electron pins Chromium by version rather than by commit: its DEPS builds
+  # the url as chromium/src.git@ + Var("chromium_version"), and that var holds
+  # "152.0.7977.169". gclient decides whether it needs the network in
+  # gclient_scm.py with
+  #
+  #     if not scm.GIT.IsValidRevision(path, revision, sha_only=True):
+  #         self._Fetch(options, prune=options.force)
+  #
+  # and sha_only reduces that test to `resolved_sha == revision`, so it is
+  # false for every name that is not already a 40 character commit id. A tag
+  # that resolves perfectly well locally still fails it. That is worth stating
+  # because the obvious fix is not one: creating the tag in the checkout
+  # changes nothing, and this function used to do exactly that.
+  #
+  # The fetch it then runs is `git fetch --prune --no-tags -- origin`, and on
+  # chromium/src that is where syncs here die rather than finish. The v2
+  # handshake completes, the ls-refs request goes out, and no answer ever
+  # comes: ~600 KB received and then silence, for an hour, across several
+  # attempts and under both HTTP/2 and HTTP/1.1. Meanwhile GitHub answers in
+  # 0.1s, so this is chromium/src specifically, not the network.
+  #
+  # So hand gclient a commit id instead of a name, in the one case where that
+  # is a statement of fact rather than a guess: when the Chromium already here
+  # is the Chromium the target Electron asks for. Two independent records have
+  # to agree before that claim is made -- the DEPS of the Electron tag being
+  # synced to, read from GitHub because src/electron is still at the old tag
+  # at this point, and chrome/VERSION as committed at the local HEAD.
+  #
+  # When they disagree Chromium really has rolled, nothing is overridden, and
+  # gclient fetches as it always did. This removes the cost of fetching
+  # nothing; it does not pretend to make a real roll cheap.
+  CHROMIUM_SHA_PIN=""
+  [ -d "$SRC_PATH/.git" ] || return 0
+  [ -f "$SRC_PATH/chrome/VERSION" ] || return 0
+
+  # The committed chrome/VERSION, not the working copy, so a patch that edited
+  # it could not make this name the wrong commit.
+  git -C "$SRC_PATH" diff --quiet HEAD -- chrome/VERSION 2>/dev/null || return 0
+  local have
+  have=$(awk -F= '
+      { sub(/\r$/, "") }
+      $1 == "MAJOR" { a = $2 } $1 == "MINOR" { b = $2 }
+      $1 == "BUILD" { c = $2 } $1 == "PATCH" { d = $2 }
+      END { if (a != "" && b != "" && c != "" && d != "") print a "." b "." c "." d }
+    ' "$SRC_PATH/chrome/VERSION" 2>/dev/null)
+  [ -n "$have" ] || return 0
+
+  # What the Electron being synced to asks for. The checkout first: a sync that
+  # hangs on chromium/src has already finished the solution, so src/electron is
+  # sitting on the target tag and its own DEPS answers this with no network at
+  # all -- which matters, because the re-run after a failed sync is exactly
+  # when this is wanted and exactly when the network has just misbehaved. Read
+  # as committed rather than from the working tree, so a patch that edits DEPS
+  # cannot influence it.
+  local deps=""
+  if [ "$(git -C "$ELECTRON_PATH" rev-parse -q --verify "refs/tags/v$ELECTRON_VERSION^{commit}" 2>/dev/null)" \
+     = "$(git -C "$ELECTRON_PATH" rev-parse HEAD 2>/dev/null)" ]; then
+    deps=$(git -C "$ELECTRON_PATH" show HEAD:DEPS 2>/dev/null)
+  fi
+  # Otherwise ask GitHub, which answers in a tenth of a second when it answers
+  # at all. A failure here is a reason to decline, not to guess.
+  if [ -z "$deps" ]; then
+    deps=$(curl -fsS --max-time 30 \
+        "https://raw.githubusercontent.com/electron/electron/v$ELECTRON_VERSION/DEPS" 2>/dev/null)
+  fi
+
+  local want
+  want=$(printf '%s\n' "$deps" \
+    | awk "/'chromium_version':/ { getline; gsub(/[^0-9.]/, \"\"); print; exit }")
+  if [ -z "$want" ]; then
+    warn "Could not read the Chromium pin for v$ELECTRON_VERSION; letting gclient resolve it"
+    return 0
+  fi
+  [ "$want" = "$have" ] || return 0
+
+  CHROMIUM_SHA_PIN=$(git -C "$SRC_PATH" rev-parse HEAD 2>/dev/null)
+  [ -n "$CHROMIUM_SHA_PIN" ] || return 0
+  log "${CYA} Chromium %s is already checked out; pinning it by commit so the sync skips the fetch${c0}\n" \
+      "$have"
+}
+
 fetch_sources() {
   # Fetches and syncs down Electron sources in src/
   check_node
@@ -735,6 +819,15 @@ fetch_sources() {
   local target_os='[ "win" ]'
   [ "$HOST_OS" = linux ] && target_os='[ "linux", "win" ]'
 
+  pin_chromium_sha
+  local chromium_pin=""
+  if [ -n "$CHROMIUM_SHA_PIN" ]; then
+    chromium_pin="
+      # See pin_chromium_sha(): naming the commit we already have is what lets
+      # gclient skip a fetch of chromium/src that cannot complete from here.
+      \"chromium_version\": \"$CHROMIUM_SHA_PIN\","
+  fi
+
   # Written by us (instead of `gclient config`) so it can carry target_os,
   # which cross-building from Linux will need.
   cat > "$ROOT_PATH/.gclient" <<EOF
@@ -745,7 +838,7 @@ solutions = [
     "deps_file": "DEPS",
     "managed": False,
     "custom_deps": {},
-    "custom_vars": {
+    "custom_vars": {$chromium_pin
       # Chromium's switch to skip deps only its own bots need (benchmarks,
       # MSan libraries); these vars flow down into Chromium's DEPS.
       "checkout_configuration": "small",
