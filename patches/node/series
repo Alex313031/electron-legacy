@@ -6,3 +6,5 @@
 06-node-xp-vista-support.patch
 07-winwrap-xp-link.patch
 08-restore-32-bit-vcbuild.patch
+09-icu-genccode-ia32.patch
+10-no-safeseh-ia32.patch

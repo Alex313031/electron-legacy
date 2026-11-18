@@ -1,0 +1,65 @@
+Title: Turn off /SAFESEH for 32-bit Windows, which ICU's data object cannot satisfy
+Origin: electron-legacy (this repo)
+
+  lld-link : error : /safeseh:
+  ../obj/global_intermediate/icudt78l_dat.obj is not compatible with SEH
+  [.../gen-regexp-special-case.vcxproj]
+
+x86 links default to /SAFESEH:YES, and that requires the linker to account for
+every object in the image: each one must either register its exception
+handlers or carry the @feat.00 symbol whose low bit says it has none. cl and ml
+emit that symbol as a matter of course. genccode does not -- it writes the ICU
+data object through its own COFF writer rather than through a compiler or an
+assembler, so there is nothing in it for /SAFESEH to go on and the link is
+refused.
+
+Set on the ia32 condition in common.gypi rather than on the targets that link
+the data, because by the time it bites that is most of them: node.exe, and
+every build-time generator that pulls ICU in. gen-regexp-special-case is
+merely the first to reach the link.
+
+x86 only, and not because the other architectures are exempt by choice:
+/SAFESEH does not exist on x64 or arm64 at all. Exception data lives in the PE
+image there rather than in a table the linker has to vouch for, so there is
+nothing to turn off.
+
+This does give up a mitigation. The alternative is teaching genccode to emit
+@feat.00, which is a small change in pkg_genc.cpp's object writer and would
+keep /SAFESEH on for everything. It is the better fix if this build ever wants
+the mitigation back; it is not the smaller one, and it edits a vendored
+dependency.
+
+diff --git a/common.gypi b/common.gypi
+--- a/common.gypi
++++ b/common.gypi
+@@ -407,6 +407,30 @@
+         'conditions': [
+           ['target_arch=="ia32"', {
+             'TargetMachine' : 1,              # /MACHINE:X86
++            # /SAFESEH:NO. ICU's data object is the reason:
++            #
++            #   lld-link : error : /safeseh:
++            #   ../obj/global_intermediate/icudt78l_dat.obj
++            #   is not compatible with SEH
++            #
++            # genccode writes that object with its own COFF writer rather than
++            # through an assembler or a compiler, and so never emits the @feat.00
++            # symbol whose low bit declares a module free of SEH handlers. cl and
++            # ml both emit it; anything that does not is rejected outright,
++            # because /SAFESEH has to account for every object in the image.
++            #
++            # Set here rather than on the targets that link the data, because by
++            # the time it fails that is most of them: node.exe, and every
++            # build-time generator that pulls ICU in, starting with
++            # gen-regexp-special-case.
++            #
++            # x86 only. /SAFESEH does not exist on x64 or arm64, where exception
++            # data lives in the PE itself rather than in a table the linker has
++            # to vouch for.
++            #
++            # The alternative is teaching genccode to emit @feat.00, which keeps
++            # the mitigation on. Worth doing if this build ever wants it back.
++            'ImageHasSafeExceptionHandlers': 'false',
+           }],
+           ['target_arch=="x64"', {
+             'TargetMachine' : 17,             # /MACHINE:X64
