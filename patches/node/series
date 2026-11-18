@@ -10,3 +10,4 @@
 10-no-safeseh-ia32.patch
 11-v8-ia32-push-registers-win.patch
 12-gyp-masm-settings.patch
+13-winwrap-masm-arch-define.patch

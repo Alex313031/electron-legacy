@@ -1,0 +1,86 @@
+Title: Pass winwrap's architecture define to MASM
+Origin: electron-legacy (this repo)
+
+  src\forwarders_x86.asm(26): error A2052: forced error : neither WINWRAP_X86
+  nor WINWRAP_X64 is defined; the build is not passing the architecture define
+  to ml [.../deps/winwrap/winwrap.vcxproj]
+
+  ml.exe /c /nologo /Zi /Fo"...forwarders_x86.obj" /W3 /errorReport:prompt
+         /Tasrc\forwarders_x86.asm
+
+No /D on that command line. winwrap's redirect table is written twice --
+static_redirects.cc for Clang, forwarders_{x86,x64}.asm for MSVC -- and the
+MASM pair guards its whole body on WINWRAP_X86 or WINWRAP_X64, because both
+files have to be in the source list: one generated project holds every
+configuration at once and a source cannot be chosen per architecture. Without
+the define both assemble to nothing, winwrap exports no slots, and node.exe
+fails at the final link on the anchor it names in /INCLUDE:.
+
+winwrap.gyp does declare the define. It puts it on abstract configurations
+called x86_Base and x64_Base, which take effect only in a tree whose own
+configurations inherit_from those names -- sawbuck-ng's do. Node's are plain
+Debug and Release with no inherit_from anywhere, so those configurations are
+never instantiated and the setting quietly never applies.
+
+Delivering it from target_defaults works instead, for two reasons that do not
+hold for every consumer but do hold here. target_defaults reaches every target
+in the build including winwrap's own, which is visible in the generated
+winwrap.vcxproj: it already carries Node's defines, NODE_OPENSSL_CONF_NAME
+among them. And one Node generation covers exactly one architecture, so
+target_arch is unambiguous -- which is precisely the assumption winwrap.gyp
+cannot make, hence its abstract configurations.
+
+Added to the *second* 'conditions' key in target_defaults, not the first.
+There are two, a .gypi is a Python literal, and the later key silently
+replaces the earlier -- so the error_on_warn block in the first one is already
+dead, and anything else put there would be too. This is the same trap that
+cost 07-winwrap-xp-link.patch a round.
+
+Needs 12-gyp-masm-settings.patch to be in place, or gyp drops MASM settings
+during the MSVS-to-MSBuild conversion with nothing but a warning.
+
+diff --git a/common.gypi b/common.gypi
+--- a/common.gypi
++++ b/common.gypi
+@@ -441,6 +441,41 @@
+     'msvs_cygwin_shell': 0, # prevent actions from trying to use cygwin
+ 
+     'conditions': [
++      # winwrap's MASM forwarders guard their whole body on an architecture
++      # define, and both files are in its source list because one generated
++      # project holds every configuration at once. Without the define both
++      # assemble to nothing, winwrap exports no redirect slots, and node.exe
++      # fails at the final link on the anchor it names in /INCLUDE:.
++      #
++      # winwrap.gyp does declare this, on abstract configurations named
++      # x86_Base and x64_Base, which only take effect in a tree whose own
++      # configurations inherit_from those names. Node's are plain Debug and
++      # Release, so nothing instantiates them and the setting never applies.
++      # Delivering it here works instead because target_defaults reaches every
++      # target in the build, winwrap's included, and because one Node
++      # generation covers exactly one architecture, so target_arch is
++      # unambiguous.
++      #
++      # This list and not the one earlier in target_defaults: there are two
++      # 'conditions' keys in this dict, a .gypi is a Python literal, and the
++      # later key silently replaces the earlier. Anything added to the first
++      # is discarded without a word.
++      #
++      # Needs 12-gyp-masm-settings.patch, or gyp drops MASM settings silently.
++      [ 'OS=="win" and target_arch=="ia32"', {
++        'msvs_settings': {
++          'MASM': {
++            'PreprocessorDefinitions': ['WINWRAP_X86=1'],
++          },
++        },
++      }],
++      [ 'OS=="win" and target_arch=="x64"', {
++        'msvs_settings': {
++          'MASM': {
++            'PreprocessorDefinitions': ['WINWRAP_X64=1'],
++          },
++        },
++      }],
+       [ 'configuring_node', {
+         'msvs_configuration_attributes': {
+           'OutputDirectory': '<(DEPTH)/out/$(Configuration)/',
