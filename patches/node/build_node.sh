@@ -13,7 +13,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.3"
+SCRIPTVER="1.0.4"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -66,6 +66,7 @@ esac
 ARCH=""
 VERBOSE=0
 IS_DEBUG=false
+USE_LTCG=true
 DO_PACKAGE=false
 DO_CLEAN=false
 DO_SYNC=false
@@ -106,6 +107,7 @@ Options:
                               Without an arch it just syncs, then exits.
   --clean                     Removes build artifacts from out dir (only <arch>'s, if given).
   --debug                     Make a debug build (no installer).
+  --no-ltcg                   Build without link-time code generation.
 
 Environment:
   ROOT_PATH          Where sources and build log go.
@@ -307,7 +309,13 @@ build_node() {
   if [ "$IS_DEBUG" = true ]; then
     vcbuild "$ARCH" debug full-icu download-all no-cctest clang-cl
   else
-    local flags=("$ARCH" full-icu download-all no-cctest clang-cl ltcg)
+    # ltcg is a size and speed optimisation, not a correctness requirement.
+    # Worth being able to drop: it is the largest single thing the final link
+    # has to do, and lld-link has crashed outright on it for the 32-bit
+    # target -- an access violation inside the linker rather than any
+    # diagnostic about the program being linked.
+    local flags=("$ARCH" full-icu download-all no-cctest clang-cl)
+    [ "$USE_LTCG" = true ] && flags+=(ltcg)
     [ "$DO_PACKAGE" = true ] && flags+=(msi)
     vcbuild "${flags[@]}"
   fi
@@ -364,6 +372,7 @@ parse_args() {
       -s|--sync) DO_SYNC=true ;;
       --clean) DO_CLEAN=true ;;
       --debug) IS_DEBUG=true ;;
+      --no-ltcg) USE_LTCG=false ;;
       *) arg_error "Unknown option '$1'" ;;
     esac
     shift
