@@ -1,0 +1,50 @@
+Title: Build V8's ia32 stack-scanning assembly on Windows
+Origin: electron-legacy (this repo)
+
+  lld-link : error : undefined symbol: _PushAllRegistersAndIterateStack
+  >>> referenced by deps/v8/src/heap/base/stack.cc:202
+  >>>               v8_base_without_compiler.lib(stack.obj)
+
+PushAllRegistersAndIterateStack pushes the callee-saved registers so cppgc's
+conservative stack scan can see them, and it is hand-written assembly chosen
+per architecture. The OS=="win" branch of v8.gyp lists only x64 and arm64;
+there is no ia32 case, so on a 32-bit Windows build nothing supplies the
+symbol. The OS!="win" branch has had an ia32 case all along.
+
+The fix is to name the file that already exists. V8 ships no ia32 masm
+counterpart, and does not need one: ia32/push_registers_asm.cc carries a
+_WIN32 branch that switches to .att_syntax and declares the symbol as
+_PushAllRegistersAndIterateStack, with the leading underscore a cdecl symbol
+takes on Win32. That branch is intact; it was simply never reached from here.
+
+x64 is the exception rather than ia32. The comment above this block records
+why: a change to push_registers_asm.cc in V8 v12.8 meant x64 had to move to
+push_registers_masm.asm on Windows even under ClangCL. Nothing in that change
+affected the ia32 file.
+
+Module-level asm() is a GNU extension, so this needs Clang. That is not a new
+constraint: vcbuild.bat refuses to build Node 24 or later on Windows without
+ClangCL.
+
+diff --git a/tools/v8_gypfiles/v8.gyp b/tools/v8_gypfiles/v8.gyp
+--- a/tools/v8_gypfiles/v8.gyp
++++ b/tools/v8_gypfiles/v8.gyp
+@@ -2056,6 +2056,18 @@
+                   '<(V8_ROOT)/src/heap/base/asm/x64/push_registers_masm.asm',
+                 ],
+               }],
++              # ia32 keeps the .cc, which x64 no longer can. The file is written
++              # for this: its _WIN32 branch emits .att_syntax and declares
++              # _PushAllRegistersAndIterateStack with the leading underscore a
++              # cdecl symbol takes on Win32. There is no ia32 masm counterpart to
++              # switch to, and none is needed. Module-level asm() is a GNU
++              # extension, which is fine here because Node 24 and later require
++              # ClangCL on Windows regardless.
++              ['_toolset == "host" and host_arch == "ia32" or _toolset == "target" and target_arch=="ia32"', {
++                'sources': [
++                  '<(V8_ROOT)/src/heap/base/asm/ia32/push_registers_asm.cc',
++                ],
++              }],
+               ['_toolset == "host" and host_arch == "arm64" or _toolset == "target" and target_arch=="arm64"', {
+                 'conditions': [
+                   ['clang==1', {
