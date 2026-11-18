@@ -1,0 +1,81 @@
+Title: Link winwrap into the standalone node.exe for Windows XP
+Origin: electron-legacy (this repo)
+
+Only reached when building Node on its own. Electron compiles the same libuv,
+V8 and src/ through GN and does not read node.gyp, so this is inert there --
+the same arrangement as 04-node-version-check-winxp.patch.
+
+Two settings, both on the node executable rather than on node_lib or on every
+target in the tree.
+
+The dependency and /INCLUDE: belong at the final link because that is where
+the __imp_<name> slots are resolved, and it is the link kernel32.lib is also
+on. Without the anchor the redirect table is an archive member nothing
+references: kernel32 satisfies every slot first, the member is never
+extracted, and the build succeeds while redirecting nothing. winwrap.gyp has
+the long version, including why /WHOLEARCHIVE is not the answer.
+
+Not applied to cctest or the embedtests: those run on the build machine, and
+giving them the anchor without the library is LNK2001.
+
+MinimumRequiredVersion is the other half. winwrap supplies the imports XP
+lacks; the subsystem version is what lets XP's loader accept the binary at
+all. 5.01 and 5.02 are as low as the linker goes for each machine.
+
+winwrap itself is fetched into deps/winwrap by build_node.sh.
+
+diff --git a/node.gyp b/node.gyp
+--- a/node.gyp
++++ b/node.gyp
+@@ -592,8 +592,51 @@
+         '<(node_lib_target_name)',
+       ],
+ 
++      'conditions': [
++        ['OS=="win"', {
++          # winwrap supplies the Win32 functions XP does not export, by
++          # defining the __imp_<name> slots the call sites load through. It has
++          # to be linked into the executable rather than into node_lib: the
++          # slots are resolved at the final link, and that is where kernel32
++          # would otherwise satisfy them.
++          #
++          # Only this target, not every executable in the tree. cctest and the
++          # embedtests are developer tools that run on the build machine, and
++          # giving them the /INCLUDE: below without the library would be
++          # LNK2001.
++          'dependencies': [
++            'deps/winwrap/winwrap.gyp:winwrap',
++          ],
++        }],
++      ],
++
+       'msvs_settings': {
+         'VCLinkerTool': {
++          'conditions': [
++            # The subsystem version is the other half of running on XP:
++            # winwrap supplies the imports, this is what lets the loader
++            # accept the binary at all. 5.01 for Win32 and 5.02 for x64,
++            # which is as low as the linker goes for each machine.
++            #
++            # /INCLUDE: names winwrap's anchor, which forces the redirect
++            # table into the link. Without it the table is an archive member
++            # nothing references: kernel32.lib is on this link line too, so it
++            # resolves every __imp_<name> first and the member is never
++            # extracted -- a clean build that redirects nothing. The symbol
++            # takes the usual decoration, hence the leading underscore on x86.
++            ['target_arch=="ia32"', {
++              'MinimumRequiredVersion': '5.01',
++              'AdditionalOptions': [
++                '/INCLUDE:_winwrap_static_redirects',
++              ],
++            }],
++            ['target_arch=="x64"', {
++              'MinimumRequiredVersion': '5.02',
++              'AdditionalOptions': [
++                '/INCLUDE:winwrap_static_redirects',
++              ],
++            }],
++          ],
+           'GenerateMapFile': 'true', # /MAP
+           'MapExports': 'true', # /MAPINFO:EXPORTS
+           'RandomizedBaseAddress': 2, # enable ASLR

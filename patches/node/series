@@ -1,6 +1,8 @@
 01-fix-crash-caused-by-gethostnamew-on-windows-7.patch
 02-fix-crash-in-uv-get-process-title-on-windows-7.patch
 03-fall-back-to-getsystemtimeasfiletime-when-the-precise.patch
-04-node-version-check-win7.patch
+04-node-version-check-winxp.patch
 05-link-crypt32-for-windows-cert-store.patch
 06-node-xp-vista-support.patch
+07-winwrap-xp-link.patch
+08-restore-32-bit-vcbuild.patch

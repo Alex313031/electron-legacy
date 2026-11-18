@@ -13,7 +13,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.2"
+SCRIPTVER="1.0.3"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -27,6 +27,13 @@ SRC_PATH="$ROOT_PATH/src"
 
 # Where node src lives once it's cloned
 NODE_PATH="$SRC_PATH/node"
+
+# winwrap supplies the Win32 functions XP does not export. It lives inside the
+# Node tree rather than beside it, because GYP resolves a dependency relative
+# to <(DEPTH) and reaching outside the tree from there is awkward --
+# deps/winwrap is the layout winwrap.gyp documents.
+WINWRAP_URL="https://github.com/Alex313031/winwrap.git"
+WINWRAP_PATH="$NODE_PATH/deps/winwrap"
 
 # Patch series to apply on top of the checkout
 PATCHES_PATH="$HERE"
@@ -253,7 +260,21 @@ fetch_sources() {
       git -C "$NODE_PATH" fetch --depth 1 origin "refs/tags/$NODE_VERSION:refs/tags/$NODE_VERSION"
   execute "Resetting to $NODE_VERSION" "Unable to reset Node" \
       git -C "$NODE_PATH" reset --hard "refs/tags/$NODE_VERSION"
-  execute "" "Unable to clean Node" git -C "$NODE_PATH" clean -fd
+  # -e deps/winwrap, or this deletes it: it is untracked as far as Node is
+  # concerned, and it is a checkout somebody may well be editing. Re-cloning it
+  # on every sync would be cheap but would silently discard that.
+  execute "" "Unable to clean Node" git -C "$NODE_PATH" clean -fd -e deps/winwrap
+}
+
+fetch_winwrap() {
+  # Only when missing, for the reason the clean exclusion above exists. Updates
+  # are then a git pull in deps/winwrap itself.
+  if [ -d "$WINWRAP_PATH/.git" ]; then
+    return 0
+  fi
+  create_dir "$(dirname "$WINWRAP_PATH")"
+  execute "Cloning winwrap into $WINWRAP_PATH" "Unable to clone winwrap" \
+      git clone --depth 1 "$WINWRAP_URL" "$WINWRAP_PATH"
 }
 
 vcbuild() {
@@ -366,7 +387,7 @@ main() {
   fi
 
   if [ "$ONLY_DOWNLOAD" = true ] || [ "$ONLY_PATCH" = true ]; then
-    [ "$ONLY_DOWNLOAD" = true ] && fetch_sources
+    [ "$ONLY_DOWNLOAD" = true ] && { fetch_sources; fetch_winwrap; }
     [ "$ONLY_PATCH" = true ] && apply_patches
     exit 0
   fi
@@ -377,6 +398,10 @@ main() {
   if [ "$DO_SYNC" = true ] || [ ! -d "$NODE_PATH/.git" ]; then
     fetch_sources
   fi
+  # Unconditional, and a no-op once it is there: a tree synced before winwrap
+  # was wired in has none, and so does one cleaned by a copy of this script
+  # that predates the exclusion.
+  fetch_winwrap
   apply_patches
   build_node
   [ "$DO_PACKAGE" = true ] && package
