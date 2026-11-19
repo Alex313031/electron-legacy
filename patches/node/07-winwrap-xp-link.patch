@@ -5,43 +5,74 @@ Only reached when building Node on its own. Electron compiles the same libuv,
 V8 and src/ through GN and never reads node.gyp, so this is inert there -- the
 same arrangement as 04-node-version-check-winxp.patch.
 
-Two settings, both on the node executable rather than on node_lib or on every
-target in the tree.
+Three settings, all on the node executable rather than on node_lib or on every
+target in the tree. Not on cctest or the embedtests either: those run on the
+build machine, and giving them the /INCLUDE: without the library is LNK2001.
 
-The dependency and /INCLUDE: belong at the final link because that is where
-the __imp_<name> slots are resolved, and it is the link kernel32.lib is also
-on. Without the anchor the redirect table is an archive member nothing
-references: kernel32 satisfies every slot first, the member is never
-extracted, and the build succeeds while redirecting nothing. winwrap.gyp has
-the long version, including why /WHOLEARCHIVE is not the answer.
+1. The dependency, so winwrap is built and its library is available.
 
-Not applied to cctest or the embedtests: those run on the build machine, and
-giving them the anchor without the library is LNK2001.
+2. AdditionalDependencies+, which prepends winwrap.lib to the link line. The
+   '+' is the whole point: a plain AdditionalDependencies appends, which puts
+   winwrap after the import libraries already there.
 
-MinimumRequiredVersion is the other half. winwrap supplies the imports XP
-lacks; the subsystem version is what lets XP's loader accept the binary at
-all. 5.01 and 5.02 are as low as the linker goes for each machine.
+   libuv names advapi32 explicitly, in deps/uv/uv.gyp's link_settings, so
+   advapi32.lib is a command-line library and position decides between it and
+   winwrap. kernel32 arrives only through the /DEFAULTLIB directives the SDK
+   headers embed, and those are processed after everything named on the line.
+   That is why the kernel32 half of winwrap's table needs no help and the
+   advapi32 half does -- and why the symptom named advapi32 functions only:
 
-winwrap itself is fetched into deps/winwrap by build_node.sh, and the define
-its .asm forwarders guard on needs 12-gyp-masm-settings.patch to reach ml.
+     lld-link : error : __declspec(dllimport) _EventWriteTransfer@28 was replaced
+     lld-link : error : __declspec(dllimport) _RegGetValueW@28 was replaced
+
+3. /INCLUDE: on winwrap's anchor, and MinimumRequiredVersion.
+
+Steps 2 and 3 are not alternatives, which cost a round to learn. winwrap's
+docs/USAGE.md is explicit: "Ordering decides who wins a reference that
+exists; the anchor guarantees the redirect object is in the link even for a
+slot nothing in the binary happens to call." winwrap.gyp's own header lists
+only the anchor and the subsystem version as the consumer's work, and is
+incomplete.
+
+winwrap is fetched into deps/winwrap by build_node.sh, and the define its
+.asm forwarders guard on needs 12-gyp-masm-settings.patch to reach ml.
 
 Note for anyone editing this: the OS=="win" entry is merged into the node
 target's existing 'conditions' list, not given a 'conditions' key of its own.
 A .gyp file is a Python literal, so two keys of the same name do not merge --
 the last silently wins and the first is discarded. The first version of this
-patch did exactly that, and the result parsed cleanly, generated cleanly, and
-produced a node.exe with /INCLUDE:_winwrap_static_redirects on the link line
-and no winwrap anywhere in the build. The half of the patch that landed in
-msvs_settings survived; the half that added a second 'conditions' key did not.
-ast.literal_eval cannot catch this, because duplicate keys are legal Python.
+patch did that, and the result parsed cleanly, generated cleanly, and produced
+a node.exe with /INCLUDE:_winwrap_static_redirects on the link line and no
+winwrap anywhere in the build. ast.literal_eval cannot catch it, because
+duplicate keys are legal Python.
 
 diff --git a/node.gyp b/node.gyp
 --- a/node.gyp
 +++ b/node.gyp
-@@ -594,6 +594,31 @@
+@@ -594,6 +594,48 @@
  
        'msvs_settings': {
          'VCLinkerTool': {
++          # Prepended, and the '+' is what does it: gyp appends a plain
++          # AdditionalDependencies, which would put winwrap after the import
++          # libraries already on this line and lose every reference that
++          # resolves before winwrap is reached.
++          #
++          # It matters here because libuv names advapi32 explicitly, in
++          # deps/uv/uv.gyp's link_settings, so advapi32.lib is a command-line
++          # library and position decides between it and winwrap. kernel32
++          # arrives only through the /DEFAULTLIB directives the SDK headers
++          # embed, and those are processed last, which is why the kernel32
++          # half of winwrap's table needs nothing and the advapi32 half does:
++          #
++          #   lld-link : error : __declspec(dllimport) _RegGetValueW@28
++          #                      was replaced
++          #
++          # The /INCLUDE: below does not cover this. The anchor guarantees the
++          # redirect object is in the link; ordering decides who wins a
++          # reference that already exists. winwrap's docs/USAGE.md calls for
++          # both, and both are needed.
++          'AdditionalDependencies+': ['$(OutDir)lib\\winwrap.lib'],
 +          'conditions': [
 +            # The subsystem version is the other half of running on XP:
 +            # winwrap supplies the imports, this is what lets XP's loader
@@ -49,11 +80,8 @@ diff --git a/node.gyp b/node.gyp
 +            # as low as the linker goes for each machine.
 +            #
 +            # /INCLUDE: names winwrap's anchor, forcing the redirect table
-+            # into the link. Without it the table is an archive member
-+            # nothing references: kernel32.lib is on this link line too, so
-+            # it resolves every __imp_<name> first and the member is never
-+            # extracted -- a clean build that redirects nothing. The symbol
-+            # takes the usual decoration, hence the underscore on x86.
++            # into the link even for slots nothing in the binary calls. The
++            # symbol takes the usual decoration, hence the underscore on x86.
 +            ['target_arch=="ia32"', {
 +              'MinimumRequiredVersion': '5.01',
 +              'AdditionalOptions': [
@@ -70,14 +98,14 @@ diff --git a/node.gyp b/node.gyp
            'GenerateMapFile': 'true', # /MAP
            'MapExports': 'true', # /MAPINFO:EXPORTS
            'RandomizedBaseAddress': 2, # enable ASLR
-@@ -613,6 +638,23 @@
+@@ -613,6 +655,23 @@
        'msvs_disabled_warnings!': [4244],
  
        'conditions': [
 +        # winwrap supplies the Win32 functions XP does not export, by defining
 +        # the __imp_<name> slots the call sites load through. It belongs on the
-+        # executable rather than on node_lib: the slots are resolved at the final
-+        # link, and that is the link kernel32.lib is also on.
++        # executable rather than on node_lib: the slots are resolved at the
++        # final link, and that is the link the import libraries are also on.
 +        #
 +        # Merged into this list rather than given a 'conditions' key of its own.
 +        # A .gyp file is a Python literal, so a second key of the same name does
