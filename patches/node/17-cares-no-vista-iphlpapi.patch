@@ -1,0 +1,146 @@
+Title: Select c-ares' pre-Vista fallbacks, and delay-load what iphlpapi is left
+Origin: electron-legacy (this repo)
+
+10 of node.exe's fatal static imports are iphlpapi entry points that arrived
+with Vista. 8 of them are c-ares':
+
+  NotifyIpInterfaceChange, CancelMibChangeNotify2   event/ares_event_configchg.c
+  GetBestRoute2                                    ares_sysconfig_win.c
+  GetUnicastIpAddressTable, FreeMibTable            ares_addrinfo_localhost.c
+  ConvertInterfaceIndexToLuid,                      util/ares_iface_ips.c
+    ConvertInterfaceLuidToNameA
+  if_nametoindex, if_indextoname                   util/ares_iface_ips.c,
+                                                   ares_getnameinfo.c
+
+c-ares already supports a target without them -- every call site has an
+#ifdef fallback for older toolchains -- so this is a configuration question,
+not a porting one. The config-change watcher drops to RegNotifyChangeKeyValue
+on the Tcpip and Tcpip6 Interfaces keys, ares_os_if_nametoindex and
+ares_os_if_indextoname go through ares_iface_ips() (GetAdaptersAddresses),
+the interface name comes from address->AdapterName, the route metric becomes
+(ULONG)-1, and system loopback enumeration returns ARES_ENOTFOUND, which the
+caller already handles by using the built-in loopback addresses.
+
+The obvious lever is the wrong one. All six HAVE_ macros sit in one
+_WIN32_WINNT >= 0x0600 block in config-win32.h, so compiling c-ares at 0x0501
+would clear them in a line -- and would also clear CARES_THREADS, gated on
+the same test twenty lines up. Threading is wanted and already works: what it
+needs is Vista synchronisation, which winwrap supplies, and that is precisely
+what distinguishes it from the iphlpapi entry points, which winwrap does not.
+So the gate here is CARES_NO_VISTA_IPHLPAPI, named in that block and in
+ares_addrinfo_localhost.c -- the one site gated on _WIN32_WINNT alone rather
+than on a HAVE_ macro -- and defined in cares.gyp for the architectures this
+tree builds for a pre-Vista Windows.
+
+That leaves 2, both from libuv's uv_if_indextoname: ConvertInterfaceIndexToLuid
+and ConvertInterfaceLuidToNameW. Node never calls it -- tcp_wrap.cc uses
+uv_if_indextoiid, which is an snprintf -- so iphlpapi can now join dbghelp and
+shell32 in the delay-load list from patch 15, where the thunk never fires. The
+comment there that said not to do this is replaced; the reason it gave was
+c-ares, and c-ares no longer calls it.
+
+One thing this does not fix, stated rather than hidden: an addon that calls
+uv_if_indextoname on XP will fault rather than get an error back, because a
+delay-load failure raises. Shimming that pair in winwrap is the fix if it
+ever matters.
+
+diff --git a/deps/cares/cares.gyp b/deps/cares/cares.gyp
+index fee055c0..d8af547b 100644
+--- a/deps/cares/cares.gyp
++++ b/deps/cares/cares.gyp
+@@ -201,6 +201,17 @@
+             '-lws2_32.lib',
+             '-liphlpapi.lib'
+           ],
++          'conditions': [
++            [ 'target_arch in "ia32 x64"', {
++              # These are the architectures this tree builds for a pre-Vista
++              # Windows -- XP for ia32, Server 2003 for x64 -- and c-ares is
++              # where 8 of node.exe's 10 pre-Vista iphlpapi imports come from.
++              # See src/lib/config-win32.h for what the define switches off
++              # and what each call site falls back to. A win-arm64 build has
++              # no legacy target to serve and keeps the Vista entry points.
++              'defines': [ 'CARES_NO_VISTA_IPHLPAPI=1' ],
++            }],
++          ],
+         }, {
+           # Not Windows i.e. POSIX
+           'cflags': [
+diff --git a/deps/cares/src/lib/ares_addrinfo_localhost.c b/deps/cares/src/lib/ares_addrinfo_localhost.c
+index cacd0237..2689caa1 100644
+--- a/deps/cares/src/lib/ares_addrinfo_localhost.c
++++ b/deps/cares/src/lib/ares_addrinfo_localhost.c
+@@ -147,8 +147,13 @@ static ares_status_t
+   ares_system_loopback_addrs(int aftype, unsigned short port,
+                              struct ares_addrinfo_node **nodes)
+ {
++/* GetUnicastIpAddressTable and FreeMibTable are Vista, and unlike the rest of
++ * the iphlpapi uses they are gated on _WIN32_WINNT alone rather than on a
++ * HAVE_ macro -- so CARES_NO_VISTA_IPHLPAPI has to be named here too. The
++ * #else returns ARES_ENOTFOUND, which is what the caller already handles by
++ * falling back to the built-in loopback addresses. */
+ #if defined(USE_WINSOCK) && defined(_WIN32_WINNT) && _WIN32_WINNT >= 0x0600 && \
+-  !defined(__WATCOMC__)
++  !defined(__WATCOMC__) && !defined(CARES_NO_VISTA_IPHLPAPI)
+   PMIB_UNICASTIPADDRESS_TABLE table;
+   unsigned int                i;
+   ares_status_t               status = ARES_ENOTFOUND;
+diff --git a/deps/cares/src/lib/config-win32.h b/deps/cares/src/lib/config-win32.h
+index fc533c75..c28242bd 100644
+--- a/deps/cares/src/lib/config-win32.h
++++ b/deps/cares/src/lib/config-win32.h
+@@ -360,8 +360,18 @@
+ /* Define to 1 if you have the `RegisterWaitForSingleObject' function. */
+ #define HAVE_REGISTERWAITFORSINGLEOBJECT 1
+ 
++/* CARES_NO_VISTA_IPHLPAPI is for a build whose target predates these, which
++   _WIN32_WINNT cannot express here: lowering that would take CARES_THREADS
++   above with it, and threading is wanted -- the Vista synchronisation it needs
++   is supplied by winwrap, whereas the iphlpapi entry points below are not.
++   Every use of these six has an #ifdef fallback: the config-change watcher
++   drops to RegNotifyChangeKeyValue on the Tcpip Interfaces keys,
++   ares_os_if_nametoindex and ares_os_if_indextoname go through
++   ares_iface_ips(), the interface name comes from address->AdapterName, and
++   the route metric becomes (ULONG)-1. */
+ #if defined(_WIN32_WINNT) && (_WIN32_WINNT >= 0x0600) && \
+-  !defined(__WATCOMC__) && !defined(WATT32)
++  !defined(__WATCOMC__) && !defined(WATT32) &&           \
++  !defined(CARES_NO_VISTA_IPHLPAPI)
+ /* Define if you have if_nametoindex() */
+ #  define HAVE_IF_NAMETOINDEX 1
+ /* Define if you have if_indextoname() */
+diff --git a/node.gypi b/node.gypi
+--- a/node.gypi
++++ b/node.gypi
+@@ -100,15 +100,24 @@
+           # plus /DELAYLOAD:dbghelp.dll, which is why Electron's XP build
+           # imports dbghelp lazily and starts where this did not.
+           #
+-          # Deliberately not iphlpapi, whose 10 pre-Vista imports would also
+-          # go quiet here: c-ares calls GetBestRoute2, NotifyIpInterfaceChange
+-          # and GetUnicastIpAddressTable while setting up a channel, so
+-          # delaying them trades a clean failure at load for a crash the first
+-          # time anything resolves a name. That one wants c-ares' own
+-          # HAVE_GETBESTROUTE2 and friends turned off instead, which selects
+-          # fallbacks it already carries.
++          # iphlpapi is here on the same terms, but only because c-ares has
++          # stopped calling it. Delay-loading it while c-ares still used
++          # GetBestRoute2, NotifyIpInterfaceChange and GetUnicastIpAddressTable
++          # to bring a channel up would have traded a clean failure at load
++          # for a crash on the first name resolution; CARES_NO_VISTA_IPHLPAPI
++          # in deps/cares/cares.gyp removes those 8 of the 10. What is left is
++          # libuv's uv_if_indextoname, wanting ConvertInterfaceIndexToLuid and
++          # ConvertInterfaceLuidToNameW, and node never calls it -- tcp_wrap.cc
++          # uses uv_if_indextoiid, which is an snprintf and nothing else. So
++          # the thunk does not fire.
++          #
++          # The residue, stated rather than hidden: an addon that calls
++          # uv_if_indextoname on XP faults instead of getting an error back,
++          # because a delay-load failure raises rather than returns. Shimming
++          # that pair in winwrap is the fix if it ever matters.
+           'DelayLoadDLLs': [
+             'dbghelp.dll',
++            'iphlpapi.dll',
+             'shell32.dll',
+           ],
+           # __delayLoadHelper2 lives here; /DELAYLOAD does not pull it in by

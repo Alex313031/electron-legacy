@@ -12,3 +12,6 @@
 12-gyp-masm-settings.patch
 13-winwrap-masm-arch-define.patch
 14-xp-manifest.patch
+15-delay-load-dbghelp.patch
+16-v8-no-etw-legacy-windows.patch
+17-cares-no-vista-iphlpapi.patch
