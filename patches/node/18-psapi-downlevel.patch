@@ -1,0 +1,102 @@
+Title: Take the downlevel psapi names instead of kernel32's K32* copies
+Origin: electron-legacy (this repo)
+
+Three of node.exe's fatal static imports are kernel32's K32EnumProcessModules,
+K32GetModuleBaseNameW and K32GetProcessMemoryInfo. All three arrived in
+Windows 7, so XP, Server 2003 and Vista export none of them, and the loader
+refuses the image before the entry point runs.
+
+No source in the tree asks for those names. Four translation units write the
+documented ones --
+
+  src/debug_utils.cc                              EnumProcessModules
+  deps/uv/src/win/util.c                          GetProcessMemoryInfo
+  deps/uv/src/win/process.c                       GetModuleBaseNameW
+  deps/v8/src/base/platform/platform-win32.cc     GetProcessMemoryInfo
+
+-- and psapi.h rewrites each one with the preprocessor:
+
+  #ifndef PSAPI_VERSION
+  #if (NTDDI_VERSION >= NTDDI_WIN7)
+  #define PSAPI_VERSION 2
+  #else
+  #define PSAPI_VERSION 1
+  #endif
+  #endif
+
+  #if (PSAPI_VERSION > 1)
+  #define EnumProcessModules          K32EnumProcessModules
+  #define GetModuleBaseNameW          K32GetModuleBaseNameW
+  #define GetProcessMemoryInfo        K32GetProcessMemoryInfo
+
+So this is a configuration question, and PSAPI_VERSION=1 is the SDK's own
+answer to it rather than a workaround. The comment above that block reads
+"Give teams a choice of using a downlevel version of psapi.h for an OS
+versions. Teams can set C_DEFINES=$(C_DEFINES) -DPSAPI_VERSION=1 for downlevel
+psapi on windows 7 and higher." It resolves the three from psapi.dll, which has
+exported them since NT 4 and which deps/uv/uv.gyp already names on the link
+line as -lpsapi, so nothing new is linked.
+
+In target_defaults rather than per target, because the four units are spread
+across three of them -- node_lib, libuv and v8_libbase -- and the macro has to
+agree everywhere it is read. The entry goes in the *second* 'conditions' key
+of target_defaults, at what is line 467 with this series applied. The first,
+at line 356, is dead: a GYP file is a Python literal, duplicate keys silently
+take the last value, and that one has been unreachable upstream for long
+enough that the error_on_warn block inside it has never run.
+
+Unconditional for Windows rather than gated on ia32 and x64, unlike the ETW
+and c-ares patches beside it. There is no cost to a current Windows: psapi.dll
+there exports these three as forwarders onto kernel32's K32* copies, so the
+only difference is one more jump through psapi, and a single code path is
+worth more than saving it.
+
+This is also why winwrap carries no shim for the three, which was the first
+plan. There would be little for one to stand on: VM_COUNTERS, the structure
+NtQueryInformationProcess returns for ProcessVmCounters, appears in no SDK
+header, and enumerating modules would mean walking the PEB loader data that
+winternl.h explicitly warns against walking -- its advice being to call
+EnumProcessModules instead, which is circular when that is the function being
+supplied. Reaching for the documented downlevel path costs three lines.
+
+diff --git a/common.gypi b/common.gypi
+--- a/common.gypi
++++ b/common.gypi
+@@ -465,6 +465,37 @@
+     'msvs_cygwin_shell': 0, # prevent actions from trying to use cygwin
+ 
+     'conditions': [
++      # Take the plain psapi names rather than the K32* ones kernel32 grew in
++      # Windows 7. psapi.h redirects EnumProcessModules, GetModuleBaseNameW
++      # and GetProcessMemoryInfo to K32EnumProcessModules and friends whenever
++      # NTDDI_VERSION is Windows 7 or later, which it is here -- so four
++      # translation units that all write the documented name
++      # (src/debug_utils.cc, deps/uv/src/win/{util,process}.c and
++      # deps/v8/src/base/platform/platform-win32.cc) end up importing three
++      # functions from kernel32 that XP, Server 2003 and Vista do not export,
++      # and the loader refuses the image.
++      #
++      # PSAPI_VERSION=1 is the SDK's own switch for this, not a trick: psapi.h
++      # says "Teams can set C_DEFINES=$(C_DEFINES) -DPSAPI_VERSION=1 for
++      # downlevel psapi". It resolves those three from psapi.dll, which has
++      # exported them since NT 4, and which deps/uv/uv.gyp already names on
++      # the link line as -lpsapi.
++      #
++      # So this is a configuration fix rather than a port, and it is why
++      # winwrap carries no shim for the three. There would be nothing for one
++      # to build on: VM_COUNTERS is in no SDK header, and the module list
++      # would mean walking the PEB loader data that winternl.h warns against
++      # walking -- advising EnumProcessModules instead, which is circular when
++      # that is the function being supplied.
++      #
++      # Unconditional for Windows rather than gated on the legacy
++      # architectures, because it costs a current Windows nothing: psapi.dll
++      # there exports these as forwarders onto kernel32's K32* copies, so the
++      # only difference is one more jump, and one code path is worth more than
++      # saving it.
++      [ 'OS=="win"', {
++        'defines': [ 'PSAPI_VERSION=1' ],
++      }],
+       # winwrap's MASM forwarders guard their whole body on an architecture
+       # define, and both files are in its source list because one generated
+       # project holds every configuration at once. Without the define both
