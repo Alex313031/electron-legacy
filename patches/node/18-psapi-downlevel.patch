@@ -35,7 +35,8 @@ answer to it rather than a workaround. The comment above that block reads
 versions. Teams can set C_DEFINES=$(C_DEFINES) -DPSAPI_VERSION=1 for downlevel
 psapi on windows 7 and higher." It resolves the three from psapi.dll, which has
 exported them since NT 4 and which deps/uv/uv.gyp already names on the link
-line as -lpsapi, so nothing new is linked.
+line as -lpsapi -- enough for node.exe, though not for everything; see the
+second half of this message.
 
 In target_defaults rather than per target, because the four units are spread
 across three of them -- node_lib, libuv and v8_libbase -- and the macro has to
@@ -58,6 +59,27 @@ header, and enumerating modules would mean walking the PEB loader data that
 winternl.h explicitly warns against walking -- its advice being to call
 EnumProcessModules instead, which is circular when that is the function being
 supplied. Reaching for the documented downlevel path costs three lines.
+
+  lld-link : error : undefined symbol: _GetProcessMemoryInfo@12
+    [...\tools\v8_gypfiles\gen-regexp-special-case.vcxproj]
+  >>> referenced by ...\deps\v8\src\base\platform\platform-win32.cc:494
+  >>>   v8_libbase.lib(platform-win32.obj):(... v8::base::OS::GetPeakMemoryUsageKb(void))
+
+That is the compile side, and the error above is the link side that follows
+from it. PSAPI_VERSION=1 makes GetProcessMemoryInfo mean psapi.dll's own export
+instead of kernel32's K32GetProcessMemoryInfo, so the symbol now comes from
+psapi.lib rather than kernel32.lib.
+
+libuv's -lpsapi supplies that for node.exe. It does not for V8's build tools:
+gen-regexp-special-case, and the others like it, link v8_libbase and nothing
+of libuv's, so platform-win32.obj arrives with a reference that no library on
+their command line can satisfy.
+
+The library goes in v8_libbase's link_settings, which gyp carries through
+static libraries to whatever finally links them. The direct_dependent_settings
+list beside it (dbghelp, winmm, ws2_32) looks like the natural home but reaches
+only targets that name v8_libbase themselves: gen-regexp-special-case does,
+while torque gets it through torque_base and fails with the same error.
 
 diff --git a/common.gypi b/common.gypi
 --- a/common.gypi
@@ -100,3 +122,25 @@ diff --git a/common.gypi b/common.gypi
        # winwrap's MASM forwarders guard their whole body on an architecture
        # define, and both files are in its source list because one generated
        # project holds every configuration at once. Without the define both
+diff --git a/tools/v8_gypfiles/v8.gyp b/tools/v8_gypfiles/v8.gyp
+--- a/tools/v8_gypfiles/v8.gyp
++++ b/tools/v8_gypfiles/v8.gyp
+@@ -1527,6 +1527,18 @@
+             '<(V8_ROOT)/src/base/win32-headers.h',
+           ],
+           'defines': ['_CRT_RAND_S'], # for rand_s()
++          # For GetProcessMemoryInfo in platform-win32.cc. With
++          # PSAPI_VERSION=1 in common.gypi that name is psapi.dll's own
++          # export rather than kernel32's K32 copy, so it needs psapi's
++          # import library. link_settings rather than the
++          # direct_dependent_settings below, because those stop at the first
++          # dependent: torque links v8_libbase only by way of torque_base,
++          # and would never see it.
++          'link_settings': {
++            'libraries': [
++              '-lpsapi.lib',
++            ],
++          },
+           'direct_dependent_settings': {
+             'msvs_settings': {
+               'VCLinkerTool': {

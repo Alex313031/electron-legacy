@@ -13,7 +13,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.4"
+SCRIPTVER="1.0.5"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -66,7 +66,10 @@ esac
 ARCH=""
 VERBOSE=0
 IS_DEBUG=false
-USE_LTCG=true
+# Empty rather than true or false, because the default depends on the
+# architecture and that is not known until the arguments have been read. An
+# explicit --ltcg or --no-ltcg fills it in; resolve_ltcg decides otherwise.
+USE_LTCG=""
 DO_PACKAGE=false
 DO_CLEAN=false
 DO_SYNC=false
@@ -107,7 +110,10 @@ Options:
                               Without an arch it just syncs, then exits.
   --clean                     Removes build artifacts from out dir (only <arch>'s, if given).
   --debug                     Make a debug build (no installer).
-  --no-ltcg                   Build without link-time code generation.
+  --ltcg                      Force link-time code generation on. Already the default for
+                              x64; on x86 this re-enables a link that is known to crash.
+  --no-ltcg                   Build without link-time code generation. Already the default
+                              for x86, where lld-link dies with an access violation.
 
 Environment:
   ROOT_PATH          Where sources and build log go.
@@ -309,11 +315,8 @@ build_node() {
   if [ "$IS_DEBUG" = true ]; then
     vcbuild "$ARCH" debug full-icu download-all no-cctest clang-cl
   else
-    # ltcg is a size and speed optimisation, not a correctness requirement.
-    # Worth being able to drop: it is the largest single thing the final link
-    # has to do, and lld-link has crashed outright on it for the 32-bit
-    # target -- an access violation inside the linker rather than any
-    # diagnostic about the program being linked.
+    # Whether ltcg is in here is decided by resolve_ltcg, which is also where
+    # the reason the 32-bit default differs from the 64-bit one is written down.
     local flags=("$ARCH" full-icu download-all no-cctest clang-cl)
     [ "$USE_LTCG" = true ] && flags+=(ltcg)
     [ "$DO_PACKAGE" = true ] && flags+=(msi)
@@ -349,11 +352,50 @@ check_prereqs() {
     || error_exit "Python 3.9+ is required, see Node's BUILDING.md"
   [ -n "${VCToolsInstallDir:-}" ] || [ -d "/c/Program Files/Microsoft Visual Studio/2022" ] \
     || warn "Visual Studio 2022 not found in the default location; vcbuild.bat will look for itself."
-  # LTO and PGO compile with clang's -flto/-fprofile-*, which cl.exe rejects.
-  log "${CYA} Note: ltcg needs the ClangCL toolset installed in Visual Studio.${c0}\n"
+  # Unconditional because build_node always passes clang-cl, whatever ltcg ends
+  # up being. Said plainly rather than tied to ltcg: that was accurate while
+  # ltcg was on for every architecture, and would now read as "not needed on
+  # x86", where it still is.
+  log "${CYA} Note: this build needs the ClangCL toolset installed in Visual Studio.${c0}\n"
   if [ "$ARCH" = x86 ] && [ "$DO_PACKAGE" = true ]; then
     error_exit "Node's MSI project only defines x64 and ARM64; there is no x86 installer"
   fi
+}
+
+# Fills in USE_LTCG when neither --ltcg nor --no-ltcg was given, which is a
+# per-architecture decision rather than one default.
+#
+# x64 links with it fine. x86 does not: lld-link exits with 0xC0000005 part way
+# through the final link, which MSBuild reports as "lld-link.exe exited with
+# code -1073741819". That is the linker faulting, not a diagnostic about the
+# program -- there is no undefined symbol, no bad object, nothing to act on, and
+# the same tree links cleanly the moment ltcg comes off.
+#
+# So the 32-bit default is off, because the alternative is a build that spends
+# an hour compiling and then dies at the one step that cannot be resumed. ltcg
+# is a size and speed optimisation, never a correctness requirement, so the
+# cost of defaulting it off is a slightly larger node.exe.
+#
+# --ltcg still forces it on, which is the point of resolving it here rather
+# than refusing the combination: when a newer lld fixes this, trying x86 again
+# is one flag and not an edit to this script.
+resolve_ltcg() {
+  # A debug build passes neither ltcg nor anything it would collide with, so
+  # there is nothing to decide and reporting a decision would be misleading.
+  # An explicit flag is called out rather than dropped quietly.
+  if [ "$IS_DEBUG" = true ]; then
+    [ -n "$USE_LTCG" ] && warn "--ltcg/--no-ltcg does not apply to a debug build; ignoring it"
+    return 0
+  fi
+  if [ -n "$USE_LTCG" ]; then
+    log "${CYA} ltcg: %s (given explicitly)${c0}\n" "$USE_LTCG"
+    return 0
+  fi
+  case "$ARCH" in
+    x86) USE_LTCG=false ;;
+    *) USE_LTCG=true ;;
+  esac
+  log "${CYA} ltcg: %s (default for %s)${c0}\n" "$USE_LTCG" "$ARCH"
 }
 
 parse_args() {
@@ -372,6 +414,7 @@ parse_args() {
       -s|--sync) DO_SYNC=true ;;
       --clean) DO_CLEAN=true ;;
       --debug) IS_DEBUG=true ;;
+      --ltcg) USE_LTCG=true ;;
       --no-ltcg) USE_LTCG=false ;;
       *) arg_error "Unknown option '$1'" ;;
     esac
@@ -402,6 +445,7 @@ main() {
   fi
 
   [ -n "$ARCH" ] || arg_error "No architecture given"
+  resolve_ltcg
   check_prereqs
 
   if [ "$DO_SYNC" = true ] || [ ! -d "$NODE_PATH/.git" ]; then
