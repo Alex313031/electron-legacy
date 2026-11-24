@@ -69,11 +69,11 @@ index 3f29da4cf6..deacbac9fa 100644
 +  # can be worked on without regenerating a patch for every change, and so it
 +  # can be consumed by projects other than this one.
 +  #
-+  # Tracks main rather than a pinned commit while the library is still being
-+  # written; pin a revision here before cutting a release that has to be
-+  # reproducible from the patch series alone.
++  # Pinned to a commit, not a branch, so the patch series alone reproduces a
++  # build: this is winwrap 0.4.4. Bump it here, and WINWRAP_REV in
++  # patches/node/build_node.sh with it, to take a newer one.
 +  'src/third_party/winwrap': {
-+      'url': 'https://github.com/Alex313031/winwrap.git' + '@' + 'main',
++      'url': 'https://github.com/Alex313031/winwrap.git' + '@' + '91f84ffb0a25cae88a5906572c76faa6b94ec229',
 +      'condition': 'checkout_win',
 +  },
 +

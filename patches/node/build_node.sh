@@ -13,7 +13,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.5"
+SCRIPTVER="1.0.6"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -33,6 +33,10 @@ NODE_PATH="$SRC_PATH/node"
 # to <(DEPTH) and reaching outside the tree from there is awkward --
 # deps/winwrap is the layout winwrap.gyp documents.
 WINWRAP_URL="https://github.com/Alex313031/winwrap.git"
+# Pinned to a commit rather than following main, so a given checkout of this
+# repository always builds against the same winwrap: this is 0.4.4. Electron's
+# pin is in patches/other/18-winwrap-library.patch; bump the two together.
+WINWRAP_REV="91f84ffb0a25cae88a5906572c76faa6b94ec229"
 WINWRAP_PATH="$NODE_PATH/deps/winwrap"
 
 # Patch series to apply on top of the checkout
@@ -275,14 +279,38 @@ fetch_sources() {
 }
 
 fetch_winwrap() {
-  # Only when missing, for the reason the clean exclusion above exists. Updates
-  # are then a git pull in deps/winwrap itself.
+  # Brings deps/winwrap to WINWRAP_REV, whether that means cloning it or moving
+  # a checkout that is already there.
+  #
+  # The one thing it will not do is disturb work in progress, for the reason
+  # the clean exclusion above exists: this is a checkout somebody may well be
+  # editing. A tree with uncommitted changes is left where it is, with a
+  # warning that the build is not using the pinned revision. A clean tree at
+  # another commit is moved, which loses nothing -- the commit it was on is
+  # still in its branch and in the reflog.
   if [ -d "$WINWRAP_PATH/.git" ]; then
-    return 0
+    local current
+    current="$(git -C "$WINWRAP_PATH" rev-parse HEAD 2>/dev/null)"
+    if [ "$current" = "$WINWRAP_REV" ]; then
+      return 0
+    fi
+    if [ -n "$(git -C "$WINWRAP_PATH" status --porcelain 2>/dev/null)" ]; then
+      warn "winwrap is at ${current:0:7} with uncommitted changes, not the pinned ${WINWRAP_REV:0:7}; leaving it alone"
+      return 0
+    fi
+  else
+    create_dir "$WINWRAP_PATH"
+    execute "Creating winwrap checkout in $WINWRAP_PATH" "Unable to initialise winwrap" \
+        git -C "$WINWRAP_PATH" init -q
+    execute "" "Unable to add the winwrap remote" \
+        git -C "$WINWRAP_PATH" remote add origin "$WINWRAP_URL"
   fi
-  create_dir "$(dirname "$WINWRAP_PATH")"
-  execute "Cloning winwrap into $WINWRAP_PATH" "Unable to clone winwrap" \
-      git clone --depth 1 "$WINWRAP_URL" "$WINWRAP_PATH"
+  # By commit, which a clone cannot do: clone takes a branch or tag. Fetching
+  # the one commit keeps it as shallow as the --depth 1 clone this replaced.
+  execute "Fetching winwrap ${WINWRAP_REV:0:7}" "Unable to fetch winwrap $WINWRAP_REV" \
+      git -C "$WINWRAP_PATH" fetch --depth 1 origin "$WINWRAP_REV"
+  execute "Checking out winwrap ${WINWRAP_REV:0:7}" "Unable to check out winwrap" \
+      git -C "$WINWRAP_PATH" -c advice.detachedHead=false checkout -q "$WINWRAP_REV"
 }
 
 vcbuild() {
