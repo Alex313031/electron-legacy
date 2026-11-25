@@ -4,8 +4,8 @@
 
 # For building NodeJS + Installer for Windows 7, separate from Electron.
 #
-# Standalone: copy this directory (the .patch files and series next to it)
-# anywhere, run it, and it clones Node, patches it, and builds it. With
+# Standalone: copy this directory (the .patch files and standalone_series next
+# to it) anywhere, run it, and it clones Node, patches it, and builds it. With
 # --package it also produces the .zip upstream publishes and, for x64, the .msi.
 
 # Fetch, patch, build and package NodeJS for legacy Windows.
@@ -35,13 +35,18 @@ NODE_PATH="$SRC_PATH/node"
 # deps/winwrap is the layout winwrap.gyp documents.
 WINWRAP_URL="https://github.com/Alex313031/winwrap.git"
 # Pinned to a commit rather than following main, so a given checkout of this
-# repository always builds against the same winwrap: this is 0.4.8. Electron's
+# repository always builds against the same winwrap: this is 0.4.9. Electron's
 # pin is in patches/other/18-winwrap-library.patch; bump the two together.
-WINWRAP_REV="34b26aff2e0fbd6266bd21ac6c3d2f9790d8448c"
+WINWRAP_REV="a185a1ba2bfafcdbac66412280db46691edcbdf6"
 WINWRAP_PATH="$NODE_PATH/deps/winwrap"
 
 # Patch series to apply on top of the checkout
 PATCHES_PATH="$HERE"
+
+# The list of patches to apply, in order. Not `series`, which is the subset
+# the Electron build applies to its own copy of Node: that build has to do
+# without the GYP-side patches this one depends on. See the header of each.
+SERIES_FILE="$PATCHES_PATH/standalone_series"
 
 # Log file from this script
 # Beside the script, not under src/: src/ doesn't exist on a first run, and
@@ -213,9 +218,28 @@ remove_path() {
       rm $RMDIRFLAGS "$path"
 }
 
+check_series_complete() {
+  # Every patch here is meant to be in standalone_series, and nothing enforces
+  # that when one is added. A patch missing from the list is not an error
+  # anywhere -- the build just goes ahead without it -- so say so. A warning,
+  # not a failure: a patch can legitimately be Electron's alone.
+  local shared="$PATCHES_PATH/series"
+  local p
+  for p in "$PATCHES_PATH"/*.patch; do
+    [ -f "$p" ] || continue
+    p=$(basename "$p")
+    grep -qxF -- "$p" "$SERIES_FILE" && continue
+    if [ -f "$shared" ] && grep -qxF -- "$p" "$shared"; then
+      warn "$p is in series (Electron's) but not in standalone_series; this build will not have it."
+    else
+      warn "$p is in neither series nor standalone_series; nothing applies it."
+    fi
+  done
+}
+
 apply_series() {
   local dir="$1"
-  local series="$PATCHES_PATH/series"
+  local series="$SERIES_FILE"
   local applied=0 skipped=0
   # Same leniency upstream's apply_patches.bat used.
   local flags=(--ignore-space-change --whitespace=nowarn)
@@ -226,6 +250,7 @@ apply_series() {
   fi
   [ -d "$dir" ] || error_exit "Patch target '$dir' doesn't exist; are sources downloaded?"
 
+  check_series_complete
   log "${CYA} Applying patches in %s${c0}\n" "$dir"
   local p file
   while IFS= read -r p || [ -n "$p" ]; do

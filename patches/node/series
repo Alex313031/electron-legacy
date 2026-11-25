@@ -1,17 +1,19 @@
+# The Node patches the Electron build applies, in src/third_party/electron_node.
+#
+# Only what Electron's GN build of Node can use: source fixes, and
+# unofficial.gni, which is that build's own file. The patches for building
+# Node by itself -- node.gyp, common.gypi, vcbuild.bat and the rest of the GYP
+# build -- are in standalone_series and are deliberately not here. Electron
+# never builds through those files, but its configure step does *load*
+# node.gyp, and the standalone winwrap dependency there names
+# deps/winwrap/winwrap.gyp, which an Electron checkout does not have: GYP
+# stops with "winwrap.gyp not found" and gen/config.gypi is never written.
+# Electron gets winwrap through GN, for every target at once.
+#
+# A patch that belongs to both builds goes in both files.
 01-fix-crash-caused-by-gethostnamew-on-windows-7.patch
 02-fix-crash-in-uv-get-process-title-on-windows-7.patch
 03-fall-back-to-getsystemtimeasfiletime-when-the-precise.patch
 04-node-version-check-winxp.patch
 05-link-crypt32-for-windows-cert-store.patch
 06-node-xp-vista-support.patch
-07-winwrap-xp-link.patch
-08-restore-32-bit-vcbuild.patch
-09-icu-genccode-ia32.patch
-10-no-safeseh-ia32.patch
-11-v8-ia32-push-registers-win.patch
-12-gyp-masm-settings.patch
-13-winwrap-masm-arch-define.patch
-14-xp-manifest.patch
-15-delay-load-dbghelp.patch
-16-cares-no-vista-iphlpapi.patch
-17-psapi-downlevel.patch

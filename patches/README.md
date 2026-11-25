@@ -7,6 +7,15 @@
 | `node/`     | `src/third_party/electron_node/` | `node/series` |
 | `other/`    | `src/`, after `chromium/`       | `other/series` |
 
+`node/` has two lists, because it serves two builds. `node/series` is what the
+Electron build applies to its own copy of Node, as in the table.
+`node/standalone_series` is what `node/build_node.sh` applies when building
+Node by itself: the same patches plus the ones for Node's own GYP build
+(`node.gyp`, `common.gypi`, `vcbuild.bat`). Those must stay out of `series` —
+Electron's configure step loads `node.gyp`, and the standalone winwrap
+dependency there names a `deps/winwrap/winwrap.gyp` that an Electron checkout
+does not have. A patch both builds need goes in both files.
+
 `chromium/`, `electron/` and `node/` are imported from upstream (mostly
 reverts of upstream changes that dropped Windows 7/8). `other/` is this repo's
 own work: anything that isn't an upstream revert (XP/Vista support,

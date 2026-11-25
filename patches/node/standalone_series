@@ -1,0 +1,30 @@
+# The Node patches build_node.sh applies, for building Node by itself.
+#
+# The complete list for that build, and the only file build_node.sh reads:
+# everything in series, which Electron's build shares, followed by the patches
+# for Node's own GYP build that Electron must not have. See series for why
+# they are kept apart.
+#
+# A patch that belongs to both builds goes in both files; build_node.sh warns
+# if series has one this file lacks.
+
+# --- Shared with the Electron build (series) ---
+01-fix-crash-caused-by-gethostnamew-on-windows-7.patch
+02-fix-crash-in-uv-get-process-title-on-windows-7.patch
+03-fall-back-to-getsystemtimeasfiletime-when-the-precise.patch
+04-node-version-check-winxp.patch
+05-link-crypt32-for-windows-cert-store.patch
+06-node-xp-vista-support.patch
+
+# --- Standalone only: the GYP build, vcbuild.bat, node.exe itself ---
+07-winwrap-xp-link.patch
+08-restore-32-bit-vcbuild.patch
+09-icu-genccode-ia32.patch
+10-no-safeseh-ia32.patch
+11-v8-ia32-push-registers-win.patch
+12-gyp-masm-settings.patch
+13-winwrap-masm-arch-define.patch
+14-xp-manifest.patch
+15-delay-load-dbghelp.patch
+16-cares-no-vista-iphlpapi.patch
+17-psapi-downlevel.patch
