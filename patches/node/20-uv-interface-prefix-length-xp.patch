@@ -23,10 +23,21 @@ never right either.
 Two changes. The structure carries its own Length, so the field is read only
 when the structure is long enough to contain it -- a question put to the data
 rather than to the Windows version. And when it is not there, the length is
-worked out from the adapter's prefix list, which is where XP keeps it:
-uv__prefix_len_from_list() takes the longest prefix that contains the address
-without being the address itself. XP returns that list only on request, hence
-GAA_FLAG_INCLUDE_PREFIX, which later Windows behave as though were always set.
+worked out from what an older Windows does provide, in uv__prefix_len_from_list():
+
+  - for IPv4, the IP address table (GetIpAddrTable), which has a row for
+    every address with its mask written out;
+  - otherwise the adapter's prefix list, taking the longest prefix that
+    contains the address without being the address itself. XP returns that
+    list only on request, hence GAA_FLAG_INCLUDE_PREFIX, which later Windows
+    behave as though were always set;
+  - failing both, /64 for an IPv6 link-local address and the full length of
+    the address for anything else.
+
+The table comes first because the list turned out not to be enough by itself.
+The first version of this patch used only the list, and on Server 2003 x64
+reported 127.0.0.1 as /32: that system gives the loopback adapter no subnet
+prefix at all. The table says 255.0.0.0, as it should.
 
 Whatever its source, the length is then clamped to the size of the address
 before it is used as one.
@@ -36,7 +47,7 @@ For both builds.
 diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
 --- a/deps/uv/src/win/util.c
 +++ b/deps/uv/src/win/util.c
-@@ -715,6 +715,80 @@
+@@ -715,6 +715,150 @@
  }
  
  
@@ -57,6 +68,50 @@ diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
 +}
 +
 +
++/* The netmask of one of this machine's IPv4 addresses, as a prefix length,
++ * from the IP address table. 0 if the table has no such address.
++ *
++ * GetIpAddrTable is the oldest of the interfaces that could answer this and
++ * the only one that simply states it: one row per IPv4 address, loopback
++ * included, each with its mask. It is IPv4 only, which is why it is the first
++ * thing uv__prefix_len_from_list() tries and not the only thing.
++ */
++static ULONG uv__prefix_len_from_ip_table(const struct sockaddr_in* sin) {
++  MIB_IPADDRTABLE* table;
++  ULONG size;
++  ULONG prefix_len;
++  DWORD i;
++
++  size = 0;
++  if (GetIpAddrTable(NULL, &size, FALSE) != ERROR_INSUFFICIENT_BUFFER ||
++      size == 0)
++    return 0;
++  table = uv__malloc(size);
++  if (table == NULL)
++    return 0;
++
++  prefix_len = 0;
++  if (GetIpAddrTable(table, &size, FALSE) == NO_ERROR) {
++    for (i = 0; i < table->dwNumEntries; i++) {
++      ULONG mask;
++
++      if (table->table[i].dwAddr != sin->sin_addr.s_addr)
++        continue;
++      /* Count the mask's leading ones. A mask of zero is left as "unknown":
++       * no interface address really has one. */
++      for (mask = ntohl(table->table[i].dwMask);
++           mask & 0x80000000u;
++           mask <<= 1)
++        prefix_len++;
++      break;
++    }
++  }
++
++  uv__free(table);
++  return prefix_len;
++}
++
++
 +/* The on-link prefix length of one of an adapter's unicast addresses, for a
 + * Windows whose IP_ADAPTER_UNICAST_ADDRESS does not say.
 + *
@@ -65,9 +120,17 @@ diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
 + * prefix list instead, in a less convenient form: one entry for the subnet,
 + * and others for the host address itself, the broadcast address and the
 + * multicast range. The subnet is the longest of them that contains the
-+ * address without being the address, so that is what is looked for. An address
-+ * with nothing but its own host entry -- ::1, for one -- is correctly /128 or
-+ * /32, which is also the answer when the list is absent altogether.
++ * address without being the address, so that is what is looked for.
++ *
++ * The list is not complete, though. Server 2003 gives the loopback adapter no
++ * subnet entry at all, so going by the list alone 127.0.0.1 came out as /32
++ * where every other Windows says /8. An IPv4 address is therefore looked up
++ * in the IP address table first, which states its mask outright, and the list
++ * is what is left for IPv6 and for an IPv4 address the table does not have.
++ *
++ * With neither, an IPv6 link-local address is /64, which is what link-local
++ * means, and anything else is the host itself: /128 or /32, which for ::1 is
++ * simply correct.
 + */
 +static ULONG uv__prefix_len_from_list(const IP_ADAPTER_ADDRESSES* adapter,
 +                                      const struct sockaddr* sa) {
@@ -80,17 +143,27 @@ diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
 +    address = (const unsigned char*) &((const struct sockaddr_in6*) sa)->sin6_addr;
 +    max_len = 128;
 +  } else {
++    ULONG from_table;
++
 +    address = (const unsigned char*) &((const struct sockaddr_in*) sa)->sin_addr;
 +    max_len = 32;
++
++    from_table = uv__prefix_len_from_ip_table((const struct sockaddr_in*) sa);
++    if (from_table != 0)
++      return from_table;
 +  }
 +
-+  /* The list itself arrived with XP SP1. */
-+  if (adapter->Length < FIELD_OFFSET(IP_ADAPTER_ADDRESSES, FirstPrefix) +
-+                        sizeof(adapter->FirstPrefix))
-+    return max_len;
-+
 +  best = 0;
-+  for (prefix = adapter->FirstPrefix; prefix != NULL; prefix = prefix->Next) {
++
++  /* The list itself arrived with XP SP1; before that there is nothing to
++   * walk, and the defaults below are the answer. */
++  if (adapter->Length >= FIELD_OFFSET(IP_ADAPTER_ADDRESSES, FirstPrefix) +
++                         sizeof(adapter->FirstPrefix))
++    prefix = adapter->FirstPrefix;
++  else
++    prefix = NULL;
++
++  for (; prefix != NULL; prefix = prefix->Next) {
 +    const struct sockaddr* psa = prefix->Address.lpSockaddr;
 +    const unsigned char* network;
 +
@@ -110,14 +183,22 @@ diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
 +      best = prefix->PrefixLength;
 +  }
 +
-+  return best != 0 ? best : max_len;
++  if (best != 0)
++    return best;
++
++  /* fe80::/10. */
++  if (sa->sa_family == AF_INET6 && address[0] == 0xfe &&
++      (address[1] & 0xc0) == 0x80)
++    return 64;
++
++  return max_len;
 +}
 +
 +
  int uv_interface_addresses(uv_interface_address_t** addresses_ptr,
      int* count_ptr) {
    IP_ADAPTER_ADDRESSES* win_address_buf;
-@@ -732,8 +806,10 @@
+@@ -732,8 +876,10 @@
    *addresses_ptr = NULL;
    *count_ptr = 0;
  
@@ -129,7 +210,7 @@ diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
  
    /* Fetch the size of the adapters reported by windows, and then get the list
     * itself. */
-@@ -878,11 +954,32 @@
+@@ -878,11 +1024,32 @@
           unicast_address = unicast_address->Next) {
        struct sockaddr* sa;
        ULONG prefix_len;

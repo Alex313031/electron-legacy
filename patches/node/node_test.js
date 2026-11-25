@@ -6,9 +6,11 @@
 //   node node_test.js --only=fs    run the tests whose name contains "fs"
 //   node node_test.js --list       list the tests and exit
 //   node node_test.js --verbose    print stack traces for failures
-//   node node_test.js --net        also run the tests that need the internet
+//   node node_test.js --no-net     skip the two tests that need the internet
 //
-// It needs nothing but node.exe: no npm, no modules, no network unless asked.
+// It needs nothing but node.exe: no npm and no modules. Two tests at the end
+// reach the internet, for name resolution and an HTTPS download; on a machine
+// without a connection they fail, and --no-net leaves them out.
 // Each test is small and independent, and is named for the part of Node it
 // goes through, so a failure says where to look. Most of them exist because a
 // particular Win32 function behind them is one Windows XP does not have and
@@ -37,7 +39,9 @@ const option = (name) => {
 };
 
 const VERBOSE = flag('verbose');
-const WITH_NET = flag('net');
+// On unless turned off. --net is still accepted, from when it was the other
+// way round, and changes nothing.
+const WITH_NET = !flag('no-net');
 const ONLY = option('only');
 const IS_WINDOWS = process.platform === 'win32';
 const TEST_TIMEOUT_MS = 20000;
@@ -145,17 +149,20 @@ test('os: network interfaces', () => {
   // and wrote the resulting netmask over the start of the first name. So a
   // damaged name or an impossible netmask here is a memory overwrite, not a
   // cosmetic fault.
+  //
+  // The note goes first, so that a failure below still shows what was read.
+  note(names.map((n) => `${n} [${interfaces[n].map((a) => a.cidr).join(' ')}]`).join(', '));
   for (const name of names) {
     assert.ok(!name.includes('\uFFFD'), `interface name is damaged: ${JSON.stringify(name)}`);
     for (const address of interfaces[name]) {
       assert.match(address.cidr || '', /\/\d+$/,
                    `${name} ${address.address} has netmask ${address.netmask} and no valid prefix`);
       if (address.address === '127.0.0.1') {
-        assert.strictEqual(address.netmask, '255.0.0.0');
+        assert.strictEqual(address.netmask, '255.0.0.0',
+                           `127.0.0.1 has netmask ${address.netmask}, not 255.0.0.0`);
       }
     }
   }
-  note(names.map((n) => `${n} [${interfaces[n].map((a) => a.cidr).join(' ')}]`).join(', '));
 });
 
 test('os: priority', () => {
@@ -797,19 +804,19 @@ test('console: terminal', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Only with --net: these need the internet, and say more about the machine's
+// Unless --no-net: these need the internet, and say more about the machine's
 // certificates, clock and connection than about this build.
 // ---------------------------------------------------------------------------
 
 test('net (external): DNS resolution', async () => {
-  if (!WITH_NET) skip('pass --net to run');
+  if (!WITH_NET) skip('--no-net was given');
   const result = await require('node:dns').promises.lookup('nodejs.org');
   assert.ok(result.address);
   note(result.address);
 });
 
 test('net (external): HTTPS request', async () => {
-  if (!WITH_NET) skip('pass --net to run');
+  if (!WITH_NET) skip('--no-net was given');
   const response = await fetch('https://nodejs.org/dist/index.json');
   assert.strictEqual(response.status, 200);
   const list = await response.json();
