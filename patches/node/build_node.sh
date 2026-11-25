@@ -6,7 +6,7 @@
 #
 # Standalone: copy this directory (the .patch files and standalone_series next
 # to it) anywhere, run it, and it clones Node, patches it, and builds it. With
-# --package it also produces the .zip upstream publishes and, for x64, the .msi.
+# --dist it also produces the .zip upstream publishes and, for x64, the .msi.
 
 # Fetch, patch, build and package NodeJS for legacy Windows.
 # Requires Python 3.9+, Git bash, NASM, and Visual Studio 2022 with Windows SDK 10.0.22621.x installed.
@@ -14,7 +14,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.8"
+SCRIPTVER="1.0.9"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -99,7 +99,7 @@ show_help() {
   cat <<EOF
 Usage:
   $SCRIPTNAME <arch> [options]
-  $SCRIPTNAME -d | -p | --deps | --clean [arch]
+  $SCRIPTNAME --download | -p | -s | --clean [-s] [arch]
 
 Builds NodeJS $NODE_VERSION for legacy Windows. With an arch, this
 downloads sources (first run only), applies patches, then builds.
@@ -111,19 +111,22 @@ Options:
   -h, --help                  Show this help.
   -v, --verbose               Verbose output (always on for the build step).
   --version                   Show script version.
-  --package                   Package built binaries into dist/ for distribution: the same
+  -d, --dist                  Package built binaries into dist/ for distribution: the same
                               node-<version>-win-<arch>.zip upstream publishes, a zip of
                               node.pdb, and on x64 the .msi installer. x86 gets the zips
                               only; Node's installer project has no x86 platform. Needs
                               7z on PATH.
-  -d, --download-sources      Only download sources, then exit; for making local modifications.
+  --download                  Only download sources, then exit; for making local modifications.
                               Discards any local changes in src/ (it resets to $NODE_VERSION).
   -p, --patch                 Only apply patches to already-downloaded sources, then exit; needs no arch.
                               Patches that are already applied are skipped.
-  -s, --sync                  Re-sync existing sources before building (same reset as -d).
-                              Without an arch it just syncs, then exits.
-  --clean                     Removes build artifacts from out dir (only <arch>'s, if given).
-  --debug                     Make a debug build (cannot be combined with --package).
+  -s, --sync                  Re-sync existing sources before building (same reset as
+                              --download). Without an arch it just syncs, then exits.
+  --clean                     Removes build artifacts (Release/, Debug/ and out/), then exits.
+                              With --sync it syncs first -- Node and winwrap reset to their
+                              pinned versions -- and then cleans, leaving a tree as fresh as
+                              a new clone without the download.
+  --debug                     Make a debug build (cannot be combined with --dist).
   --ltcg                      Force link-time code generation on. Already the default for
                               x64; on x86 this re-enables a link that is known to crash.
   --no-ltcg                   Build without link-time code generation. Already the default
@@ -275,7 +278,7 @@ apply_series() {
 }
 
 apply_patches() {
-  [ -d "$NODE_PATH" ] || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
+  [ -d "$NODE_PATH" ] || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME --download' first"
 
   local tag head
   if tag=$(git -C "$NODE_PATH" rev-parse -q --verify "refs/tags/$NODE_VERSION^{commit}" 2>/dev/null); then
@@ -458,9 +461,9 @@ check_prereqs() {
     # vcbuild runs `7z` by name for the zip and reports "Cannot create" when
     # it is missing -- after the whole build. Better said before it.
     command -v 7z >/dev/null 2>&1 \
-      || error_exit "--package needs 7z on PATH (7-Zip's install directory is not added by its installer)"
+      || error_exit "--dist needs 7z on PATH (7-Zip's install directory is not added by its installer)"
     [ "$IS_DEBUG" = true ] \
-      && error_exit "--package needs a release build; vcbuild only stages and installs Release"
+      && error_exit "--dist needs a release build; vcbuild only stages and installs Release"
     if [ "$ARCH" = x86 ]; then
       log "${CYA} Note: x86 gets the .zip only. Node's MSI project defines x64 and ARM64, so there is no x86 installer.${c0}\n"
     fi
@@ -513,8 +516,12 @@ parse_args() {
       -h|--help) show_help; exit 0 ;;
       -v|--verbose) VERBOSE=1 ;;
       --version) show_version ;;
-      --package) DO_PACKAGE=true ;;
-      -d|--download-sources) ONLY_DOWNLOAD=true ;;
+      -d|--dist) DO_PACKAGE=true ;;
+      --download) ONLY_DOWNLOAD=true ;;
+      # The names these two had before, said out loud rather than as "unknown
+      # option": -d in particular used to mean download and now means dist.
+      --package) arg_error "--package is now --dist (or -d)" ;;
+      --download-sources) arg_error "--download-sources is now --download" ;;
       -p|--patch) ONLY_PATCH=true ;;
       -s|--sync) DO_SYNC=true ;;
       --clean) DO_CLEAN=true ;;
@@ -539,6 +546,15 @@ main() {
   printf '\n==== %s: %s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$SCRIPTNAME" "$*" >> "$LOG_FILE"
 
   if [ "$DO_CLEAN" = true ]; then
+    # --clean ends the run whatever else was asked for, so --sync has to be
+    # handled here or it would never happen. Sync first: it resets tracked
+    # files and removes untracked ones, but the build directories are ignored
+    # by Node's .gitignore and survive it, which is why the two are worth
+    # combining at all.
+    if [ "$DO_SYNC" = true ]; then
+      fetch_sources
+      fetch_winwrap
+    fi
     clean_out
     exit 0
   fi
