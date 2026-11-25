@@ -150,7 +150,7 @@ diff --git a/electron/npm/install.js b/electron/npm/install.js
 diff --git a/electron/npm/package.json b/electron/npm/package.json
 --- a/electron/npm/package.json
 +++ b/electron/npm/package.json
-@@ -1,4 +1,15 @@
+@@ -1,4 +1,17 @@
  {
 +  "name": "electron",
 +  "description": "Electron for legacy Windows (XP/Vista/7/8/8.1)",
@@ -168,7 +168,7 @@ diff --git a/electron/npm/package.json b/electron/npm/package.json
    "main": "index.js",
    "types": "electron.d.ts",
    "bin": {
-@@ -15,10 +26,13 @@
+@@ -15,10 +28,13 @@
      "index.js",
      "install.js"
    ],
