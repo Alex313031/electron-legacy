@@ -10,12 +10,12 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.7"
+SCRIPTVER="1.3.8"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Electron release the patches in patches/ are made for.
-ELECTRON_VERSION="44.11.3"
+ELECTRON_VERSION="44.11.5"
 
 # The gclient root: .gclient and the state files beside it (.gclient_entries,
 # .cipd/, .gcs_entries), plus src/, dist/ and build.log. Kept in a subdirectory
@@ -1075,18 +1075,50 @@ sync_patched_deps() {
   # on every fresh setup, so clone it directly and leave gclient's bookkeeping
   # to a real sync -- it recognises an existing checkout of the right remote.
   #
-  # Only when the directory is missing. Once it exists, leave it alone: winwrap
-  # is ours and under active development, so that is a reasonable place to be
-  # editing, and re-fetching would put it back to whatever DEPS names and take
-  # the edits with it. Updates are then a git pull in the dependency itself.
-  local dep url ref target
+  # A dependency that is already there is brought to the commit DEPS names,
+  # with one exception. winwrap is ours and under active development, so its
+  # checkout is a reasonable place to be editing, and nothing here discards
+  # work: a tree with uncommitted changes is left where it is, with a warning
+  # that the build is not using the pinned revision. A clean tree at another
+  # commit is moved, which loses nothing -- the commit it was on is still in
+  # its branch and in the reflog.
+  #
+  # It used to be left alone once it existed, whatever DEPS said. That was
+  # written when DEPS tracked a branch and an update was a `git pull` in the
+  # dependency. With a pinned commit it meant a pin bump in the patch series
+  # never reached an existing checkout: the series applied, DEPS named the new
+  # commit, and the build went on against the old one -- found when `gn gen`
+  # failed on a bug the new pin had already fixed.
+  #
+  # Only a pin that is a full commit hash is enforced. A branch or tag name
+  # says "whatever that is now", and a checkout that already exists is one
+  # answer to that; chasing a moving ref on every build is a network round
+  # trip to learn nothing most of the time.
+  local dep url ref target current
   for dep in "${PATCHED_DEPS[@]}"; do
     target="$SRC_PATH/$dep"
-    [ -d "$target" ] && continue
 
     read -r url ref < <(dep_url_from_deps "$dep") \
       || error_exit "Could not read the $dep entry from $SRC_PATH/DEPS"
     [ -n "$url" ] || error_exit "No URL for $dep in $SRC_PATH/DEPS"
+
+    if [ -d "$target" ]; then
+      # Not a git checkout, or not pinned to a commit: nothing to compare.
+      [ -d "$target/.git" ] || continue
+      [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || continue
+
+      current="$(git -C "$target" rev-parse HEAD 2>/dev/null)"
+      [ "$current" = "$ref" ] && continue
+      if [ -n "$(git -C "$target" status --porcelain 2>/dev/null)" ]; then
+        warn "$dep is at ${current:0:7} with uncommitted changes, not the pinned ${ref:0:7}; leaving it alone"
+        continue
+      fi
+      execute "Fetching $dep ${ref:0:7}" "no commit $ref in $url" \
+          git -C "$target" fetch --quiet --depth 1 origin "$ref"
+      execute "Moving $dep from ${current:0:7} to ${ref:0:7}" "could not check out $ref" \
+          git -C "$target" -c advice.detachedHead=false checkout --quiet "$ref"
+      continue
+    fi
 
     create_dir "$(dirname "$target")"
     # --depth 1 because nothing here wants the dependency's history; a build

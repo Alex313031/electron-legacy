@@ -47,11 +47,22 @@
    whether a machine got D3D9 or software. `chrome://gpu` per OS would turn the matrix below from
    "launches" into something meaningful, and would tell us whether the D3D9 port is carrying any
    real load anywhere
- - Remaining non-fatal gaps on XP: 17 delay-loaded `user32`/`advapi32` functions (touch, pointer,
-   display config, clipboard listeners, power notifications, `AddConditionalAce`) and a libuv
-   `tcp.c` that does not tolerate `SetFileCompletionNotificationModes` failing the way `udp.c`
-   does. These fail on first use rather than at load, so they are features missing, not a
-   non-starter
+ - Remaining non-fatal gaps on XP: 31 delay-loaded functions, and a libuv `tcp.c` that does not
+   tolerate `SetFileCompletionNotificationModes` failing the way `udp.c` does. These fail on
+   first use rather than at load, so they are features missing, not a non-starter.
+   `user32` (15): touch, pointer, display config, clipboard listeners, power notifications,
+   `ChangeWindowMessageFilterEx`, `UpdateLayeredWindowIndirect`. `advapi32` (2):
+   `AddConditionalAce`, `AddMandatoryAce`. `cfgmgr32` (1): `CM_Get_DevNode_PropertyW`, reached
+   only from the WinRT MIDI backend, which is gated on both a disabled-by-default feature and
+   Windows 10. `iphlpapi` (7), `shell32` (5) and `ole32` (1) became visible only when XP copies
+   of those three were added to the reference set -- the count was 18 while they could not be
+   judged, which is the checker's documented blind spot rather than a change in the binary. Two
+   of the new ones are libuv's, and the first three named here are answered by winwrap as of
+   0.4.4, so they drop off this list at the next build:
+   `ConvertInterfaceIndexToLuid`/`ConvertInterfaceLuidToNameW` plus
+   `if_indextoname`/`if_nametoindex` are `getaddrinfo.c`'s IPv6 scope-id path, and
+   `SHGetKnownFolderPath` is the crash-dump folder fallback in `process.c` that runs only when a
+   registry read fails. `Shell_NotifyIconGetRect` is worth knowing about while testing the tray
  - Decide whether winwrap should dispatch at runtime instead of replacing statically. YY-Thunks
    resolves the real export with a cached `GetProcAddress` and falls back to its own
    implementation, so one binary runs XP through Win11 and uses the real kernel32 where it exists.
@@ -87,7 +98,6 @@
    Chromium's installer policy lives in `chrome/browser/component_updater`, which Electron doesn't
    link. Either a small fetcher against the component-update endpoint, or a real
    `ComponentUpdateService`. L1/L2 stays out of reach either way without VMP signing certs
- - Add standalone NodeJS XP/Vista patch for libuv functions (still requires an XP compatible CRT)
  - Handle the Chromium pin actually moving. `pin_chromium_sha` in `build.sh` stops gclient
    fetching chromium/src only when the pinned version has not changed, which is the normal case
    for an Electron patch release. gclient's test is `IsValidRevision(..., sha_only=True)`, which

@@ -1,4 +1,4 @@
-Title: Select c-ares' pre-Vista fallbacks, and delay-load what iphlpapi is left
+Title: Select c-ares' pre-Vista fallbacks, leaving iphlpapi a plain static import
 Origin: electron-legacy (this repo)
 
 10 of node.exe's fatal static imports are iphlpapi entry points that arrived
@@ -33,16 +33,19 @@ than on a HAVE_ macro -- and defined in cares.gyp for the architectures this
 tree builds for a pre-Vista Windows.
 
 That leaves 2, both from libuv's uv_if_indextoname: ConvertInterfaceIndexToLuid
-and ConvertInterfaceLuidToNameW. Node never calls it -- tcp_wrap.cc uses
-uv_if_indextoiid, which is an snprintf -- so iphlpapi can now join dbghelp and
-shell32 in the delay-load list from patch 15, where the thunk never fires. The
-comment there that said not to do this is replaced; the reason it gave was
-c-ares, and c-ares no longer calls it.
+and ConvertInterfaceLuidToNameW. Those are winwrap's now -- src/net.cc, from
+0.4.4 -- so the references are settled there and neither appears in node.exe's
+iphlpapi imports. With all 10 accounted for, everything node.exe does import
+from iphlpapi is something XP exports, and the DLL stays an ordinary static
+import.
 
-One thing this does not fix, stated rather than hidden: an addon that calls
-uv_if_indextoname on XP will fault rather than get an error back, because a
-delay-load failure raises. Shimming that pair in winwrap is the fix if it
-ever matters.
+An earlier form of this patch delay-loaded iphlpapi instead, on the grounds
+that node never calls uv_if_indextoname and so the thunk would never fire. It
+left a residue: an addon that did call it faulted on XP, because a delay-load
+failure raises rather than returns. Supplying the pair removes the residue and
+the need for the delay-load with it, so the only change here to node.gypi is to
+the comment patch 15 left, which said why iphlpapi was not in the delay-load
+list and gave c-ares as the reason.
 
 diff --git a/deps/cares/cares.gyp b/deps/cares/cares.gyp
 index fee055c0..d8af547b 100644
@@ -112,7 +115,7 @@ index fc533c75..c28242bd 100644
 diff --git a/node.gypi b/node.gypi
 --- a/node.gypi
 +++ b/node.gypi
-@@ -100,15 +100,24 @@
+@@ -100,13 +100,20 @@
            # plus /DELAYLOAD:dbghelp.dll, which is why Electron's XP build
            # imports dbghelp lazily and starts where this did not.
            #
@@ -123,24 +126,20 @@ diff --git a/node.gypi b/node.gypi
 -          # time anything resolves a name. That one wants c-ares' own
 -          # HAVE_GETBESTROUTE2 and friends turned off instead, which selects
 -          # fallbacks it already carries.
-+          # iphlpapi is here on the same terms, but only because c-ares has
-+          # stopped calling it. Delay-loading it while c-ares still used
-+          # GetBestRoute2, NotifyIpInterfaceChange and GetUnicastIpAddressTable
-+          # to bring a channel up would have traded a clean failure at load
-+          # for a crash on the first name resolution; CARES_NO_VISTA_IPHLPAPI
-+          # in deps/cares/cares.gyp removes those 8 of the 10. What is left is
++          # Not iphlpapi, which stays a static import and needs no help to be
++          # one. It had 10 pre-Vista imports. c-ares accounted for 8 -- it
++          # called GetBestRoute2, NotifyIpInterfaceChange and
++          # GetUnicastIpAddressTable to bring a channel up -- and
++          # CARES_NO_VISTA_IPHLPAPI in deps/cares/cares.gyp removes those by
++          # selecting fallbacks c-ares already carries. The other 2 are
 +          # libuv's uv_if_indextoname, wanting ConvertInterfaceIndexToLuid and
-+          # ConvertInterfaceLuidToNameW, and node never calls it -- tcp_wrap.cc
-+          # uses uv_if_indextoiid, which is an snprintf and nothing else. So
-+          # the thunk does not fire.
++          # ConvertInterfaceLuidToNameW, and winwrap supplies both (its
++          # src/net.cc), so they never reach iphlpapi's import list at all.
++          # What node.exe still imports from iphlpapi, XP exports.
 +          #
-+          # The residue, stated rather than hidden: an addon that calls
-+          # uv_if_indextoname on XP faults instead of getting an error back,
-+          # because a delay-load failure raises rather than returns. Shimming
-+          # that pair in winwrap is the fix if it ever matters.
++          # Delay-loading it would have hidden the 10 rather than dealt with
++          # them: a clean failure at load traded for a crash on the first
++          # name resolution.
            'DelayLoadDLLs': [
              'dbghelp.dll',
-+            'iphlpapi.dll',
              'shell32.dll',
-           ],
-           # __delayLoadHelper2 lives here; /DELAYLOAD does not pull it in by

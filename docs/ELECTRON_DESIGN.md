@@ -4,8 +4,8 @@ A medium-to-high level tour of the `electron/electron` repository: how it grafts
 itself onto Chromium, how it patches its upstreams, how a build is assembled,
 and how the pieces fit together at runtime.
 
-Written against the Electron **44.11.1** tree (Chromium 152.0.7977.169, Node
-v24.22.2). Specific line numbers are deliberately avoided; file paths and target
+Written against the Electron **44.11.5** tree (Chromium 152.0.7977.169, Node
+v24.22.3). Specific line numbers are deliberately avoided; file paths and target
 names are given so you can go look. Everything here describes the *Electron*
 repo, not Chromium, and not this repo's own build scripts.
 

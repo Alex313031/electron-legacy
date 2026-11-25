@@ -13,12 +13,12 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.0.6"
+SCRIPTVER="1.0.7"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Node release tag to build.
-NODE_VERSION="v24.22.2"
+NODE_VERSION="v24.22.3"
 
 ROOT_PATH="${ROOT_PATH:-$HERE}"
 
@@ -34,9 +34,9 @@ NODE_PATH="$SRC_PATH/node"
 # deps/winwrap is the layout winwrap.gyp documents.
 WINWRAP_URL="https://github.com/Alex313031/winwrap.git"
 # Pinned to a commit rather than following main, so a given checkout of this
-# repository always builds against the same winwrap: this is 0.4.4. Electron's
+# repository always builds against the same winwrap: this is 0.4.8. Electron's
 # pin is in patches/other/18-winwrap-library.patch; bump the two together.
-WINWRAP_REV="91f84ffb0a25cae88a5906572c76faa6b94ec229"
+WINWRAP_REV="34b26aff2e0fbd6266bd21ac6c3d2f9790d8448c"
 WINWRAP_PATH="$NODE_PATH/deps/winwrap"
 
 # Patch series to apply on top of the checkout
