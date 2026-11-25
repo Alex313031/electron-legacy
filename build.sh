@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.8"
+SCRIPTVER="1.3.9"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -1228,23 +1228,79 @@ gen_out() {
   write_args "$(out_dir)" "${args[@]}"
 }
 
+gn_arg_lines() {
+  # The lines of an args.gn with every import() replaced by the lines of the
+  # file it names, recursively -- which is how depot_tools' gn_helper reads
+  # one, and so how autoninja sees it. `//` is the source root, a leading `/`
+  # an absolute path, anything else relative to the importing file.
+  local file="$1" line target
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ ^[[:space:]]*import\(\"([^\"]+)\"\) ]]; then
+      target="${BASH_REMATCH[1]}"
+      case "$target" in
+        //*) target="$SRC_PATH/${target#//}" ;;
+        /*)  ;;
+        *)   target="$(dirname "$file")/$target" ;;
+      esac
+      [ -f "$target" ] && gn_arg_lines "$target"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$file"
+}
+
 uses_siso() {
   # Which driver autoninja will pick for this out dir. Mirrors the choice
-  # depot_tools' autoninja.py makes, because that is what decides whether our
-  # job count has to travel as a Ninja or a Siso flag:
-  #   - an explicit `use_siso` in args.gn wins. Read the generated args.gn
-  #     rather than assets/args/, so --gn-args counts too.
-  #   - otherwise Siso is the default for a Chromium checkout (which this is:
-  #     build/config/gclient_args.gni has build_with_chromium = true)...
-  #   - ...except in an out dir Ninja has already built in. autoninja prints a
-  #     "switch to Siso" suggestion and stays on Ninja, so the .ninja_deps it
-  #     left behind stays usable. Our out dirs are in exactly that state.
+  # depot_tools' autoninja.py makes -- _main_inner and _get_use_siso_default --
+  # step for step, because that choice decides whether our job count has to
+  # travel as a Ninja or a Siso flag, and because this script says which one
+  # is about to build. A mirror that is only nearly right announces Siso and
+  # then watches Ninja run, which is what this did until it was read against
+  # the original.
+  #
+  #   1. An explicit `use_siso` among the GN args wins, the last one if there
+  #      are several, with imports followed. Read from the generated args.gn
+  #      rather than assets/args/, so --gn-args counts too.
+  #   2. Otherwise there is a default, and for this checkout it is Ninja. The
+  #      default is looked up under the *primary solution*, the first one
+  #      .gclient names, and it needs <that>/build/config/siso/.sisoenv to
+  #      exist before anything else is considered. For Chromium the primary
+  #      solution is src/ and the file is there. Here it is src/electron,
+  #      which has no build/config at all -- .sisoenv sits in src/, where this
+  #      lookup does not go. So the answer is no, whatever the rest says.
+  #   3. Were .sisoenv found, Siso would be the default if the solution's .gn
+  #      sets use_siso = true, or its gclient_args.gni has build_with_chromium
+  #      = true, or the out dir already holds a .siso_deps.
+  #   4. And even then not in an out dir Ninja has already built in: autoninja
+  #      prints a "switch to Siso" suggestion and stays on Ninja, so the
+  #      .ninja_deps it left behind stays usable.
+  #
+  # In short: an Electron checkout builds with Ninja unless the args say
+  # use_siso = true. Having SISO_PATH set does not change that; it only says
+  # which Siso to run once something has chosen Siso.
   local out="$SRC_PATH/$1"
-  local args="$out/args.gn"
+  local args="$out/args.gn" explicit=""
   if [ -f "$args" ]; then
-    grep -Eq '^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*false' "$args" && return 1
-    grep -Eq '^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*true' "$args" && return 0
+    explicit=$(gn_arg_lines "$args" \
+      | sed -nE 's/^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*(true|false)([[:space:]]|#|$).*/\1/p' \
+      | tail -n 1)
+    [ "$explicit" = false ] && return 1
+    [ "$explicit" = true ] && return 0
   fi
+
+  # The primary solution. fetch_sources writes .gclient with the one solution,
+  # src/electron.
+  local root="$ELECTRON_PATH"
+  [ -f "$root/build/config/siso/.sisoenv" ] || return 1
+
+  if ! { [ -f "$root/.gn" ] \
+           && grep -Eq '^[[:space:]]*use_siso[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$root/.gn"; } \
+     && ! { [ -f "$root/build/config/gclient_args.gni" ] \
+           && grep -q 'build_with_chromium = true' "$root/build/config/gclient_args.gni"; } \
+     && [ ! -f "$out/.siso_deps" ]; then
+    return 1
+  fi
+
   [ -f "$out/.ninja_deps" ] && return 1
   return 0
 }
