@@ -20,8 +20,15 @@ npm install
 npx electron .
 ```
 
-The binary downloads on first use rather than during `npm install`, the same as
-upstream Electron since v44. To fetch it ahead of time, run `npx install-electron`.
+The binary downloads during `npm install`, through the package's postinstall
+script, as Electron's did through v41. Upstream now waits until first use; this
+package does not, so after the install it is there in
+`node_modules/electron/dist` to inspect or run.
+
+Set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` to install without downloading. The binary
+is then fetched on first use instead, or by `npx install-electron`. The same
+fallback covers an install that runs no scripts (`--ignore-scripts`, or a
+package manager that blocks dependency scripts by default).
 
 ### Pointing somewhere else
 
