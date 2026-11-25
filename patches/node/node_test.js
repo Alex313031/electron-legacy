@@ -141,7 +141,21 @@ test('os: network interfaces', () => {
   assert.ok(names.length > 0, 'no network interfaces at all');
   const loopback = names.some((n) => interfaces[n].some((a) => a.internal));
   assert.ok(loopback, 'no loopback interface');
-  note(names.join(', '));
+  // Patch 20: on XP libuv read a prefix length the structure does not have,
+  // and wrote the resulting netmask over the start of the first name. So a
+  // damaged name or an impossible netmask here is a memory overwrite, not a
+  // cosmetic fault.
+  for (const name of names) {
+    assert.ok(!name.includes('\uFFFD'), `interface name is damaged: ${JSON.stringify(name)}`);
+    for (const address of interfaces[name]) {
+      assert.match(address.cidr || '', /\/\d+$/,
+                   `${name} ${address.address} has netmask ${address.netmask} and no valid prefix`);
+      if (address.address === '127.0.0.1') {
+        assert.strictEqual(address.netmask, '255.0.0.0');
+      }
+    }
+  }
+  note(names.map((n) => `${n} [${interfaces[n].map((a) => a.cidr).join(' ')}]`).join(', '));
 });
 
 test('os: priority', () => {

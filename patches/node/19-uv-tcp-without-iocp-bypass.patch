@@ -1,0 +1,55 @@
+Title: Let a TCP socket work without the completion-port bypass
+Origin: electron-legacy (this repo)
+
+On Windows XP every TCP socket failed before it was used:
+
+  net: TCP over IPv4 loopback        FAIL
+      listen EISDIR: illegal operation on a directory 127.0.0.1
+
+for listen and connect alike, so no server, no HTTP and no fetch -- while UDP
+and named pipes on the same machine were fine.
+
+EISDIR is libuv's translation of ERROR_INVALID_FUNCTION, and that is winwrap's
+answer to SetFileCompletionNotificationModes when it is asked for
+FILE_SKIP_COMPLETION_PORT_ON_SUCCESS. The function is Vista's. The flag asks
+that an operation which completes synchronously should not also queue a
+completion packet, and XP has no such mode: it queues the packet regardless.
+winwrap could say yes and does not, deliberately, because a caller told yes
+stops waiting for the packet and may free the OVERLAPPED that XP then
+completes into. Refusing costs an optimisation; agreeing costs a wild pointer.
+
+uv__udp_set_socket() already takes that refusal for what it is and carries on
+without UV_HANDLE_SYNC_BYPASS_IOCP. uv__tcp_set_socket() treats any failure of
+the call as fatal to the socket. This gives it the same two lines. Without the
+flag a TCP handle goes through the completion port for every operation, which
+is the path libuv already takes for a socket with a non-IFS LSP installed, so
+it is not a new mode being exercised for the first time.
+
+No change on Vista and later, where the call succeeds.
+
+For both builds: Electron's main process uses the same libuv sockets.
+
+diff --git a/deps/uv/src/win/tcp.c b/deps/uv/src/win/tcp.c
+--- a/deps/uv/src/win/tcp.c
++++ b/deps/uv/src/win/tcp.c
+@@ -191,9 +191,18 @@
+   if (!(handle->flags & UV_HANDLE_EMULATE_IOCP) && !non_ifs_lsp) {
+     UCHAR sfcnm_flags =
+         FILE_SKIP_SET_EVENT_ON_HANDLE | FILE_SKIP_COMPLETION_PORT_ON_SUCCESS;
+-    if (!SetFileCompletionNotificationModes((HANDLE) socket, sfcnm_flags))
++    /* Not every Windows can do this. SetFileCompletionNotificationModes is
++     * Vista's, and where it is supplied for an older system the honest answer
++     * to FILE_SKIP_COMPLETION_PORT_ON_SUCCESS is ERROR_INVALID_FUNCTION: XP
++     * queues a completion packet for an operation that finished synchronously
++     * whatever it is told, so claiming otherwise would have the caller stop
++     * waiting for a packet that still arrives. The bypass is an optimisation
++     * and the socket works without it, through the completion port like any
++     * other; uv__udp_set_socket() has always treated this error that way. */
++    if (SetFileCompletionNotificationModes((HANDLE) socket, sfcnm_flags))
++      handle->flags |= UV_HANDLE_SYNC_BYPASS_IOCP;
++    else if (GetLastError() != ERROR_INVALID_FUNCTION)
+       return GetLastError();
+-    handle->flags |= UV_HANDLE_SYNC_BYPASS_IOCP;
+   }
+ 
+   if (handle->flags & UV_HANDLE_TCP_NODELAY) {

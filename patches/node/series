@@ -18,3 +18,5 @@
 05-link-crypt32-for-windows-cert-store.patch
 06-node-xp-vista-support.patch
 18-uv-monotonic-hrtime.patch
+19-uv-tcp-without-iocp-bypass.patch
+20-uv-interface-prefix-length-xp.patch
