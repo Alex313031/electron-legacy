@@ -1,0 +1,90 @@
+Title: PDFium: fall back to a loadable font, and survive GetDC failing
+Origin: electron-legacy (this repo), after Supermium M156
+       (https://github.com/win32ss/supermium)
+
+Two changes to PDFium's font handling on Windows, both taken from Supermium's
+pdfium font fix and both for the benefit of the PDF viewer Electron embeds.
+
+1. core/fxge/cfx_font.cpp. CFX_Font::LoadSubstFace asks the font mapper for a
+   face to stand in for a font the document names but does not embed. The
+   mapper can return null -- it picked a system font and then could not load
+   it, which on older Windows happens with raster fonts that have no outline
+   data to give -- and every character set in that font is then left
+   undrawn. When that happens two fonts that can be loaded are tried in turn:
+   Arial Unicode MS, present where Office is, and Tahoma, present everywhere.
+
+   Two things differ from the Supermium original. Each retry starts from a
+   fresh CFX_SubstFont rather than reusing the one a failed lookup has
+   already written to. And the font's data is recorded for whichever attempt
+   succeeds: as written there, the Tahoma branch set the face and not
+   font_data_, and the Skia device will not draw text from a font whose data
+   span is empty (fx_skia_device.cpp returns false for it), so the last
+   fallback was the one that did least.
+
+   Windows only. The font names mean nothing elsewhere.
+
+2. xfa/fgas/font/cfgas_fontmgr.cpp. EnumGdiFonts did CHECK(hdc) on the
+   result of GetDC(nullptr), turning a failed call into a crash. It returns
+   the empty list instead, which its callers already handle. XFA is enabled
+   in Windows builds (pdf_enable_xfa_override), so this code is in the
+   binary.
+
+Applies unchanged in substance to PDFium as of Chromium 152; neither file is
+touched by anything else in the series.
+
+diff --git a/third_party/pdfium/core/fxge/cfx_font.cpp b/third_party/pdfium/core/fxge/cfx_font.cpp
+--- a/third_party/pdfium/core/fxge/cfx_font.cpp
++++ b/third_party/pdfium/core/fxge/cfx_font.cpp
+@@ -213,9 +213,32 @@
+   vertical_ = bVertical;
+   object_tag_ = 0;
+   subst_font_ = std::make_unique<CFX_SubstFont>();
+-  face_ = CFX_GEModule::Get()->GetFontMgr()->GetBuiltinMapper()->FindSubstFace(
+-      face_name, bTrueType, flags, weight, italic_angle, code_page,
+-      subst_font_.get());
++  CFX_FontMapper* mapper = CFX_GEModule::Get()->GetFontMgr()->GetBuiltinMapper();
++  face_ = mapper->FindSubstFace(face_name, bTrueType, flags, weight,
++                                italic_angle, code_page, subst_font_.get());
++#if BUILDFLAG(IS_WIN)
++  // The mapper can come back with nothing: it found a system font to stand in
++  // for `face_name` and then could not load it. On older Windows that is not
++  // rare -- a raster font such as MS Sans Serif has no outline data to hand
++  // over -- and text set in it is then simply not drawn. Two fonts that can
++  // be loaded, and cover a great deal between them, are tried before giving
++  // up: Arial Unicode MS where Office has installed it, and Tahoma, which
++  // every Windows since 2000 has.
++  //
++  // After Supermium, which adds the same two. Unlike that patch, each attempt
++  // starts from a fresh CFX_SubstFont, since a failed lookup leaves the old
++  // one part filled in, and the font data is recorded for whichever attempt
++  // succeeds -- there the last fallback returned a face without its data,
++  // which the Skia device then refuses to draw text with.
++  for (const char* fallback : {"Arial Unicode MS", "Tahoma"}) {
++    if (face_) {
++      break;
++    }
++    subst_font_ = std::make_unique<CFX_SubstFont>();
++    face_ = mapper->FindSubstFace(fallback, bTrueType, flags, weight,
++                                  italic_angle, code_page, subst_font_.get());
++  }
++#endif  // BUILDFLAG(IS_WIN)
+   if (face_) {
+     font_data_ = face_->GetData();
+   }
+diff --git a/third_party/pdfium/xfa/fgas/font/cfgas_fontmgr.cpp b/third_party/pdfium/xfa/fgas/font/cfgas_fontmgr.cpp
+--- a/third_party/pdfium/xfa/fgas/font/cfgas_fontmgr.cpp
++++ b/third_party/pdfium/xfa/fgas/font/cfgas_fontmgr.cpp
+@@ -216,7 +216,12 @@
+     dest_face_name_with_null[src_face_name.size() + 1] = 0;
+   }
+   HDC hdc = ::GetDC(nullptr);
+-  CHECK(hdc);
++  // No device context is no fonts, not a reason to end the process: GetDC can
++  // fail where the desktop heap is exhausted, and an empty list is something
++  // every caller already handles. From Supermium.
++  if (!hdc) {
++    return fonts;
++  }
+   EnumFontFamiliesExW(hdc, (LPLOGFONTW)&lfFind, (FONTENUMPROCW)GdiFontEnumProc,
+                       (LPARAM)&fonts, 0);
+   ::ReleaseDC(nullptr, hdc);

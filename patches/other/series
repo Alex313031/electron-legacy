@@ -19,3 +19,4 @@
 20-angle-d3d9-init-diagnostics.patch
 21-gpu-swiftshader-init-fallback.patch
 22-legacy-sandbox.patch
+23-pdfium-font-fallback.patch
