@@ -29,8 +29,8 @@ needs is Vista synchronisation, which winwrap supplies, and that is precisely
 what distinguishes it from the iphlpapi entry points, which winwrap does not.
 So the gate here is CARES_NO_VISTA_IPHLPAPI, named in that block and in
 ares_addrinfo_localhost.c -- the one site gated on _WIN32_WINNT alone rather
-than on a HAVE_ macro -- and defined in cares.gyp for the architectures this
-tree builds for a pre-Vista Windows.
+than on a HAVE_ macro -- and defined, in cares.gyp and in unofficial.gni, for
+the architectures this tree builds for a pre-Vista Windows.
 
 That leaves 2, both from libuv's uv_if_indextoname: ConvertInterfaceIndexToLuid
 and ConvertInterfaceLuidToNameW. Those are winwrap's now -- src/net.cc, from
@@ -43,9 +43,16 @@ An earlier form of this patch delay-loaded iphlpapi instead, on the grounds
 that node never calls uv_if_indextoname and so the thunk would never fire. It
 left a residue: an addon that did call it faulted on XP, because a delay-load
 failure raises rather than returns. Supplying the pair removes the residue and
-the need for the delay-load with it, so the only change here to node.gypi is to
-the comment patch 15 left, which said why iphlpapi was not in the delay-load
-list and gave c-ares as the reason.
+the need for the delay-load with it. The comment in node.gypi that says so is
+part of patch 15, which is where that list of delay-loaded DLLs is added.
+
+For both builds, and that is why the define is set twice. Node's own build
+reads it from cares.gyp. Electron builds the same sources with GN, from
+deps/cares/unofficial.gni, which takes only the list of source files out of
+cares.gyp and none of its defines -- so with the gyp half alone Electron's
+c-ares was compiled with every Vista call still in it, behind a delay-loaded
+iphlpapi, to fault the first time anything used dns.resolve() on XP. The two
+conditions name the same architectures in each build system's own spelling.
 
 diff --git a/deps/cares/cares.gyp b/deps/cares/cares.gyp
 index fee055c0..d8af547b 100644
@@ -112,34 +119,22 @@ index fc533c75..c28242bd 100644
  /* Define if you have if_nametoindex() */
  #  define HAVE_IF_NAMETOINDEX 1
  /* Define if you have if_indextoname() */
-diff --git a/node.gypi b/node.gypi
---- a/node.gypi
-+++ b/node.gypi
-@@ -100,13 +100,20 @@
-           # plus /DELAYLOAD:dbghelp.dll, which is why Electron's XP build
-           # imports dbghelp lazily and starts where this did not.
-           #
--          # Deliberately not iphlpapi, whose 10 pre-Vista imports would also
--          # go quiet here: c-ares calls GetBestRoute2, NotifyIpInterfaceChange
--          # and GetUnicastIpAddressTable while setting up a channel, so
--          # delaying them trades a clean failure at load for a crash the first
--          # time anything resolves a name. That one wants c-ares' own
--          # HAVE_GETBESTROUTE2 and friends turned off instead, which selects
--          # fallbacks it already carries.
-+          # Not iphlpapi, which stays a static import and needs no help to be
-+          # one. It had 10 pre-Vista imports. c-ares accounted for 8 -- it
-+          # called GetBestRoute2, NotifyIpInterfaceChange and
-+          # GetUnicastIpAddressTable to bring a channel up -- and
-+          # CARES_NO_VISTA_IPHLPAPI in deps/cares/cares.gyp removes those by
-+          # selecting fallbacks c-ares already carries. The other 2 are
-+          # libuv's uv_if_indextoname, wanting ConvertInterfaceIndexToLuid and
-+          # ConvertInterfaceLuidToNameW, and winwrap supplies both (its
-+          # src/net.cc), so they never reach iphlpapi's import list at all.
-+          # What node.exe still imports from iphlpapi, XP exports.
-+          #
-+          # Delay-loading it would have hidden the 10 rather than dealt with
-+          # them: a clean failure at load traded for a crash on the first
-+          # name resolution.
-           'DelayLoadDLLs': [
-             'dbghelp.dll',
-             'shell32.dll',
+diff --git a/deps/cares/unofficial.gni b/deps/cares/unofficial.gni
+--- a/deps/cares/unofficial.gni
++++ b/deps/cares/unofficial.gni
+@@ -39,6 +39,15 @@
+       }
+       if (is_win) {
+         defines += [ "CARES_PULL_WS2TCPIP_H=1" ]
++
++        # The same define cares.gyp sets, for the same architectures, which
++        # are the ones built for a pre-Vista Windows: it makes c-ares use the
++        # fallbacks it already has for the iphlpapi functions Vista added.
++        # Needed here separately because this file takes only the source list
++        # from cares.gyp. See config-win32.h.
++        if (target_cpu == "x86" || target_cpu == "x64") {
++          defines += [ "CARES_NO_VISTA_IPHLPAPI=1" ]
++        }
+       }
+       if (is_posix) {
+         defines += [

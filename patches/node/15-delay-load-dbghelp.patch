@@ -54,7 +54,7 @@ diff --git a/node.gypi b/node.gypi
 index 6587270c..a9a5a4c8 100644
 --- a/node.gypi
 +++ b/node.gypi
-@@ -61,6 +61,57 @@
+@@ -61,6 +61,64 @@
          }],
        ],
      }],
@@ -83,13 +83,20 @@ index 6587270c..a9a5a4c8 100644
 +          # plus /DELAYLOAD:dbghelp.dll, which is why Electron's XP build
 +          # imports dbghelp lazily and starts where this did not.
 +          #
-+          # Deliberately not iphlpapi, whose 10 pre-Vista imports would also
-+          # go quiet here: c-ares calls GetBestRoute2, NotifyIpInterfaceChange
-+          # and GetUnicastIpAddressTable while setting up a channel, so
-+          # delaying them trades a clean failure at load for a crash the first
-+          # time anything resolves a name. That one wants c-ares' own
-+          # HAVE_GETBESTROUTE2 and friends turned off instead, which selects
-+          # fallbacks it already carries.
++          # Not iphlpapi, which stays a static import and needs no help to be
++          # one. It had 10 pre-Vista imports. c-ares accounted for 8 -- it
++          # called GetBestRoute2, NotifyIpInterfaceChange and
++          # GetUnicastIpAddressTable to bring a channel up -- and
++          # CARES_NO_VISTA_IPHLPAPI in deps/cares/cares.gyp removes those by
++          # selecting fallbacks c-ares already carries. The other 2 are
++          # libuv's uv_if_indextoname, wanting ConvertInterfaceIndexToLuid and
++          # ConvertInterfaceLuidToNameW, and winwrap supplies both (its
++          # src/net.cc), so they never reach iphlpapi's import list at all.
++          # What node.exe still imports from iphlpapi, XP exports.
++          #
++          # Delay-loading it would have hidden the 10 rather than dealt with
++          # them: a clean failure at load traded for a crash on the first
++          # name resolution.
 +          'DelayLoadDLLs': [
 +            'dbghelp.dll',
 +            'shell32.dll',

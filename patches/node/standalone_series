@@ -15,6 +15,7 @@
 04-node-version-check-winxp.patch
 05-link-crypt32-for-windows-cert-store.patch
 06-node-xp-vista-support.patch
+16-cares-no-vista-iphlpapi.patch
 18-uv-monotonic-hrtime.patch
 19-uv-tcp-without-iocp-bypass.patch
 20-uv-interface-prefix-length-xp.patch
@@ -29,5 +30,4 @@
 13-winwrap-masm-arch-define.patch
 14-xp-manifest.patch
 15-delay-load-dbghelp.patch
-16-cares-no-vista-iphlpapi.patch
 17-psapi-downlevel.patch
