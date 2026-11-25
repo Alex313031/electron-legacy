@@ -17,3 +17,4 @@
 04-node-version-check-winxp.patch
 05-link-crypt32-for-windows-cert-store.patch
 06-node-xp-vista-support.patch
+18-uv-monotonic-hrtime.patch

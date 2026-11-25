@@ -1,0 +1,109 @@
+Title: Keep uv__hrtime() from running backwards on Windows XP
+Origin: electron-legacy (this repo)
+
+The first full run of the standalone build on XP -- node.exe from the release
+.zip, in a four-processor VM -- died in two places with the same message:
+
+  Assertion failed: new_time >= loop->time, file src\win\core.c, line 327
+
+once in a script that started several workers, and once running `npm -v`.
+
+That assert is uv_update_time() checking that a loop's clock has not gone
+backwards, and the clock is uv__hrtime(), which is QueryPerformanceCounter and
+nothing else. From Vista on that counter is monotonic, as documented. On XP it
+need not be: with more than one processor the HAL may read each processor's own
+time stamp counter, those are not synchronised with one another, and a thread
+moved from one processor to another between two readings can see the second
+come out lower than the first. Multi-core AMD processors are where it was best
+known -- "/usepmtimer" in boot.ini exists for it -- and virtual machines show
+it too. So this is XP behaving as XP does, not a fault in the build, and any
+libuv program can hit it there.
+
+The fix is in uv__hrtime() rather than at the assert, because the assert is
+right to want what it wants and it is not the only caller: uv_hrtime() feeds
+process.hrtime() and performance.now(), which have no business going backwards
+either. Each reading is clamped to the largest one any thread has been given so
+far, with an interlocked compare-exchange, so no lock and no allocation. Where
+the counter is well behaved the clamp never changes a value. Where it is not,
+time stands still for the length of the skew.
+
+InterlockedCompareExchange64 is a compiler intrinsic on both architectures
+(cmpxchg8b on ia32), not an import -- kernel32 only began exporting it with
+Vista, which would otherwise make this a patch that fixes XP and cannot load
+there.
+
+For both builds: Electron runs the same libuv loop on the same systems.
+
+Setting /usepmtimer on an affected machine remains the better cure where it is
+available, since it corrects the counter for every program rather than
+papering over it in one.
+
+diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
+--- a/deps/uv/src/win/util.c
++++ b/deps/uv/src/win/util.c
+@@ -78,6 +78,10 @@
+ /* Frequency of the high-resolution clock. */
+ static uint64_t hrtime_frequency_ = 0;
+ 
++/* The highest performance counter reading any thread has been given. See
++ * uv__hrtime(). */
++static volatile LONG64 hrtime_last_ = 0;
++
+ /* Parameters for WSAQUERYSETW inside uv__gethostnamew_nt60 */
+ static GUID guid_host_name = SVCID_HOSTNAME;
+ static AFPROTOCOLS af_protocols[2] = { {AF_INET, IPPROTO_UDP},
+@@ -489,6 +493,8 @@
+ 
+ uint64_t uv__hrtime(unsigned int scale) {
+   LARGE_INTEGER counter;
++  LONG64 now;
++  LONG64 last;
+   double scaled_freq;
+   double result;
+ 
+@@ -499,12 +505,44 @@
+   }
+   assert(counter.QuadPart != 0);
+ 
++  /* Never hand out a reading lower than one already handed out.
++   *
++   * QueryPerformanceCounter is documented as monotonic and from Vista on it
++   * is. On Windows XP it need not be: with more than one processor the HAL
++   * may read each processor's own time stamp counter, those are not
++   * synchronised, and a thread that is moved from one processor to another
++   * between two calls can see the counter step backwards. It is common on
++   * multi-core AMD processors, which is what "/usepmtimer" in boot.ini was
++   * for, and common in virtual machines.
++   *
++   * libuv is not written for that. uv_update_time() asserts that a loop's
++   * clock has not gone backwards, so the first backward step ends the process
++   * with "Assertion failed: new_time >= loop->time" -- seen on XP running
++   * nothing more than `npm -v`.
++   *
++   * So the reading is clamped to the largest one seen so far, process-wide
++   * and lock-free. Where the counter behaves this never changes a value. Where
++   * it does not, time stands still for the length of the skew instead of
++   * running backwards, which every caller can live with.
++   */
++  now = counter.QuadPart;
++  /* Stores `now` only on the very first call, and otherwise just reads. */
++  last = InterlockedCompareExchange64(&hrtime_last_, now, 0);
++  while (last != 0 && last < now) {
++    LONG64 seen = InterlockedCompareExchange64(&hrtime_last_, now, last);
++    if (seen == last)
++      break;
++    last = seen;
++  }
++  if (last > now)
++    now = last;
++
+   /* Because we have no guarantee about the order of magnitude of the
+    * performance counter interval, integer math could cause this computation
+    * to overflow. Therefore we resort to floating point math.
+    */
+   scaled_freq = (double) hrtime_frequency_ / scale;
+-  result = (double) counter.QuadPart / scaled_freq;
++  result = (double) now / scaled_freq;
+   return (uint64_t) result;
+ }
+ 
