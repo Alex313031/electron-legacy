@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.3.9"
+SCRIPTVER="1.4.0"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -736,7 +736,9 @@ pin_chromium_sha() {
   #
   # So hand gclient a commit id instead of a name, in the one case where that
   # is a statement of fact rather than a guess: when the Chromium already here
-  # is the Chromium the target Electron asks for. Two independent records have
+  # is the Chromium the target Electron asks for. The id is that of the
+  # upstream commit underneath Electron's patches, not of HEAD -- see the end
+  # of this function for what pinning HEAD did. Two independent records have
   # to agree before that claim is made -- the DEPS of the Electron tag being
   # synced to, read from GitHub because src/electron is still at the old tag
   # at this point, and chrome/VERSION as committed at the local HEAD.
@@ -788,8 +790,43 @@ pin_chromium_sha() {
   fi
   [ "$want" = "$have" ] || return 0
 
-  CHROMIUM_SHA_PIN=$(git -C "$SRC_PATH" rev-parse HEAD 2>/dev/null)
-  [ -n "$CHROMIUM_SHA_PIN" ] || return 0
+  # The commit to name is Chromium's own, and that is not HEAD. Electron's
+  # apply_all_patches hook commits its patches with `git am`, so HEAD is the
+  # tip of a couple of hundred Electron commits stacked on the upstream one.
+  # Pinning HEAD -- which this used to do -- tells gclient that the *patched*
+  # tree is the revision to sync to. It then leaves the old stack where it is,
+  # and the hook applies the new Electron's patches on top of the old
+  # Electron's. With --3way a patch that is already in is skipped quietly, so
+  # the result looks like a successful sync and is the union of both sets:
+  # anything the new version dropped is still there. Going from 44.11.3 to
+  # 44.11.5, both on Chromium 152.0.7977.169, that left the gin
+  # Converter<ArrayBufferView> that 44.11.3 patched into gin/converter.h
+  # beside the one 44.11.5 moved into its own std_converter.h, and the build
+  # stopped on the redefinition.
+  #
+  # So walk back to the first commit Electron's script did not make. Not
+  # refs/patches/upstream-head: the hook rewrites that to HEAD every time it
+  # runs, so after one sync of the kind described it names the old stack too.
+  # The committer cannot be wrong that way, and it finds the real base through
+  # any number of stacked layers, which is what lets a re-sync repair a tree
+  # this already happened to.
+  local base
+  base=$(git -C "$SRC_PATH" log -n 5000 --format='%H %ce' HEAD 2>/dev/null \
+    | awk '$2 != "scripts@electron" { print $1; exit }')
+  [ -n "$base" ] || return 0
+
+  # And that commit has to be the Chromium asked for in its own right. The
+  # check above read chrome/VERSION at HEAD, which an Electron patch could in
+  # principle have edited.
+  local base_version
+  base_version=$(git -C "$SRC_PATH" show "$base:chrome/VERSION" 2>/dev/null | awk -F= '
+      { sub(/\r$/, "") }
+      $1 == "MAJOR" { a = $2 } $1 == "MINOR" { b = $2 }
+      $1 == "BUILD" { c = $2 } $1 == "PATCH" { d = $2 }
+      END { if (a != "" && b != "" && c != "" && d != "") print a "." b "." c "." d }')
+  [ "$base_version" = "$want" ] || return 0
+
+  CHROMIUM_SHA_PIN="$base"
   log "${CYA} Chromium %s is already checked out; pinning it by commit so the sync skips the fetch${c0}\n" \
       "$have"
 }
