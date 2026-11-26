@@ -1,4 +1,4 @@
-// Type definitions for Electron 44.10.2
+// Type definitions for Electron 44.11.5
 // Project: http://electronjs.org/
 // Definitions by: The Electron Team <https://github.com/electron/electron>
 // Definitions: https://github.com/electron/typescript-definitions
@@ -10008,6 +10008,22 @@ declare namespace Electron {
      */
     static setApplicationMenu(menu: (Menu) | (null)): void;
     /**
+     * Sets the colors used to highlight the hovered or keyboard-focused item in every
+     * menu the app shows, including context menus and the menu bar's dropdowns. Light
+     * and dark colors are set separately, and any color left unset keeps the default
+     * for that mode. Each call replaces the colors set by any previous call. Passing
+     * `null` restores the defaults.
+     *
+     * Menus opened after the call use the new colors. The colors are not applied while
+     * Windows high contrast mode or forced colors are active, so the user's system
+     * colors take priority.
+     *
+     * This method has no effect on macOS and Linux.
+     *
+     * @platform win32
+     */
+    static setHighlightColors(options: (HighlightColorsOptions) | (null)): void;
+    /**
      * Appends the `menuItem` to the menu.
      */
     append(menuItem: MenuItem): void;
@@ -14922,7 +14938,9 @@ declare namespace Electron {
      *
      * Same as `subscribeNotification`, but uses `NSNotificationCenter` for local
      * defaults. This is necessary for events such as
-     * `NSUserDefaultsDidChangeNotification`.
+     * `NSUserDefaultsDidChangeNotification`. `callback` is always called on the main
+     * thread. Notifications posted on other threads are delivered to it
+     * asynchronously.
      *
      * If `event` is null, the `NSNotificationCenter` doesn’t use it as criteria for
      * delivery to the observer. See docs for more information.
@@ -22761,6 +22779,17 @@ declare namespace Electron {
     origin?: string;
   }
 
+  interface HighlightColorsOptions {
+    /**
+     * Colors used when menus are drawn with light colors.
+     */
+    light?: Light;
+    /**
+     * Colors used when menus are drawn with dark colors.
+     */
+    dark?: Dark;
+  }
+
   interface IgnoreMouseEventsOptions {
     /**
      * If true, forwards mouse move messages to Chromium, enabling mouse related events
@@ -25444,6 +25473,18 @@ declare namespace Electron {
   interface Children {
   }
 
+  interface Dark {
+    /**
+     * Background color of the hovered or keyboard-focused menu item, as a CSS color
+     * string.
+     */
+    background?: string;
+    /**
+     * Text color of the hovered or keyboard-focused menu item, as a CSS color string.
+     */
+    foreground?: string;
+  }
+
   interface EditFlags {
     /**
      * Whether the renderer believes it can undo.
@@ -25554,6 +25595,18 @@ declare namespace Electron {
      * @platform win32
      */
     enabled: boolean;
+  }
+
+  interface Light {
+    /**
+     * Background color of the hovered or keyboard-focused menu item, as a CSS color
+     * string (e.g. `#0067c0`).
+     */
+    background?: string;
+    /**
+     * Text color of the hovered or keyboard-focused menu item, as a CSS color string.
+     */
+    foreground?: string;
   }
 
   interface Margins {
@@ -25981,6 +26034,7 @@ declare namespace Electron {
     type HidDeviceAddedDetails = Electron.HidDeviceAddedDetails;
     type HidDeviceRemovedDetails = Electron.HidDeviceRemovedDetails;
     type HidDeviceRevokedDetails = Electron.HidDeviceRevokedDetails;
+    type HighlightColorsOptions = Electron.HighlightColorsOptions;
     type IgnoreMouseEventsOptions = Electron.IgnoreMouseEventsOptions;
     type ImportCertificateOptions = Electron.ImportCertificateOptions;
     type ImportSharedTextureOptions = Electron.ImportSharedTextureOptions;
@@ -26109,6 +26163,7 @@ declare namespace Electron {
     type WillResizeDetails = Electron.WillResizeDetails;
     type Animate = Electron.Animate;
     type Children = Electron.Children;
+    type Dark = Electron.Dark;
     type EditFlags = Electron.EditFlags;
     type Env = Electron.Env;
     type FeatureReports = Electron.FeatureReports;
@@ -26116,6 +26171,7 @@ declare namespace Electron {
     type InputReports = Electron.InputReports;
     type Interfaces = Electron.Interfaces;
     type LaunchItems = Electron.LaunchItems;
+    type Light = Electron.Light;
     type Margins = Electron.Margins;
     type MediaFlags = Electron.MediaFlags;
     type Metadata = Electron.Metadata;
@@ -26400,6 +26456,7 @@ declare namespace Electron {
     type HidDeviceAddedDetails = Electron.HidDeviceAddedDetails;
     type HidDeviceRemovedDetails = Electron.HidDeviceRemovedDetails;
     type HidDeviceRevokedDetails = Electron.HidDeviceRevokedDetails;
+    type HighlightColorsOptions = Electron.HighlightColorsOptions;
     type IgnoreMouseEventsOptions = Electron.IgnoreMouseEventsOptions;
     type ImportCertificateOptions = Electron.ImportCertificateOptions;
     type ImportSharedTextureOptions = Electron.ImportSharedTextureOptions;
@@ -26528,6 +26585,7 @@ declare namespace Electron {
     type WillResizeDetails = Electron.WillResizeDetails;
     type Animate = Electron.Animate;
     type Children = Electron.Children;
+    type Dark = Electron.Dark;
     type EditFlags = Electron.EditFlags;
     type Env = Electron.Env;
     type FeatureReports = Electron.FeatureReports;
@@ -26535,6 +26593,7 @@ declare namespace Electron {
     type InputReports = Electron.InputReports;
     type Interfaces = Electron.Interfaces;
     type LaunchItems = Electron.LaunchItems;
+    type Light = Electron.Light;
     type Margins = Electron.Margins;
     type MediaFlags = Electron.MediaFlags;
     type Metadata = Electron.Metadata;
@@ -26742,6 +26801,7 @@ declare namespace Electron {
     type HidDeviceAddedDetails = Electron.HidDeviceAddedDetails;
     type HidDeviceRemovedDetails = Electron.HidDeviceRemovedDetails;
     type HidDeviceRevokedDetails = Electron.HidDeviceRevokedDetails;
+    type HighlightColorsOptions = Electron.HighlightColorsOptions;
     type IgnoreMouseEventsOptions = Electron.IgnoreMouseEventsOptions;
     type ImportCertificateOptions = Electron.ImportCertificateOptions;
     type ImportSharedTextureOptions = Electron.ImportSharedTextureOptions;
@@ -26870,6 +26930,7 @@ declare namespace Electron {
     type WillResizeDetails = Electron.WillResizeDetails;
     type Animate = Electron.Animate;
     type Children = Electron.Children;
+    type Dark = Electron.Dark;
     type EditFlags = Electron.EditFlags;
     type Env = Electron.Env;
     type FeatureReports = Electron.FeatureReports;
@@ -26877,6 +26938,7 @@ declare namespace Electron {
     type InputReports = Electron.InputReports;
     type Interfaces = Electron.Interfaces;
     type LaunchItems = Electron.LaunchItems;
+    type Light = Electron.Light;
     type Margins = Electron.Margins;
     type MediaFlags = Electron.MediaFlags;
     type Metadata = Electron.Metadata;
@@ -27083,6 +27145,7 @@ declare namespace Electron {
     type HidDeviceAddedDetails = Electron.HidDeviceAddedDetails;
     type HidDeviceRemovedDetails = Electron.HidDeviceRemovedDetails;
     type HidDeviceRevokedDetails = Electron.HidDeviceRevokedDetails;
+    type HighlightColorsOptions = Electron.HighlightColorsOptions;
     type IgnoreMouseEventsOptions = Electron.IgnoreMouseEventsOptions;
     type ImportCertificateOptions = Electron.ImportCertificateOptions;
     type ImportSharedTextureOptions = Electron.ImportSharedTextureOptions;
@@ -27211,6 +27274,7 @@ declare namespace Electron {
     type WillResizeDetails = Electron.WillResizeDetails;
     type Animate = Electron.Animate;
     type Children = Electron.Children;
+    type Dark = Electron.Dark;
     type EditFlags = Electron.EditFlags;
     type Env = Electron.Env;
     type FeatureReports = Electron.FeatureReports;
@@ -27218,6 +27282,7 @@ declare namespace Electron {
     type InputReports = Electron.InputReports;
     type Interfaces = Electron.Interfaces;
     type LaunchItems = Electron.LaunchItems;
+    type Light = Electron.Light;
     type Margins = Electron.Margins;
     type MediaFlags = Electron.MediaFlags;
     type Metadata = Electron.Metadata;
@@ -27521,6 +27586,7 @@ declare namespace Electron {
     type HidDeviceAddedDetails = Electron.HidDeviceAddedDetails;
     type HidDeviceRemovedDetails = Electron.HidDeviceRemovedDetails;
     type HidDeviceRevokedDetails = Electron.HidDeviceRevokedDetails;
+    type HighlightColorsOptions = Electron.HighlightColorsOptions;
     type IgnoreMouseEventsOptions = Electron.IgnoreMouseEventsOptions;
     type ImportCertificateOptions = Electron.ImportCertificateOptions;
     type ImportSharedTextureOptions = Electron.ImportSharedTextureOptions;
@@ -27649,6 +27715,7 @@ declare namespace Electron {
     type WillResizeDetails = Electron.WillResizeDetails;
     type Animate = Electron.Animate;
     type Children = Electron.Children;
+    type Dark = Electron.Dark;
     type EditFlags = Electron.EditFlags;
     type Env = Electron.Env;
     type FeatureReports = Electron.FeatureReports;
@@ -27656,6 +27723,7 @@ declare namespace Electron {
     type InputReports = Electron.InputReports;
     type Interfaces = Electron.Interfaces;
     type LaunchItems = Electron.LaunchItems;
+    type Light = Electron.Light;
     type Margins = Electron.Margins;
     type MediaFlags = Electron.MediaFlags;
     type Metadata = Electron.Metadata;

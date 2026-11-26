@@ -23,6 +23,18 @@ if (isInstalled()) {
   process.exit(0);
 }
 
+// This runs as the package's postinstall script, so the binary arrives with
+// `npm install` -- as it did for every Electron through v41. v42 moved the
+// download to first use. ELECTRON_SKIP_BINARY_DOWNLOAD is the switch those
+// versions had for an install that should not fetch anything (a CI job that
+// only lints, a machine with no route to the release host), and it means the
+// same here. It is honoured for the postinstall run only: reached any other
+// way -- `npx install-electron`, or index.js finding no binary on first use --
+// this script has been asked for the binary and gets it.
+if (process.env.npm_lifecycle_event === 'postinstall' && process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) {
+  process.exit(0);
+}
+
 const platform = process.env.ELECTRON_INSTALL_PLATFORM || process.env.npm_config_platform || process.platform;
 let arch = process.env.ELECTRON_INSTALL_ARCH || process.env.npm_config_arch || process.arch;
 
@@ -85,7 +97,7 @@ function isInstalled() {
 // unzips and makes path.txt point at the correct executable
 function extractFile(zipPath) {
   // extract-zip, not upstream's @electron-internal/extract-zip, which is the
-  // extractor Electron used through v43. Upstream's is a Rust/napi addon whose
+  // extractor Electron used through v42. Upstream's is a Rust/napi addon whose
   // prebuilt index.win32-x64-msvc.node imports ProcessPrng from
   // bcryptprimitives.dll (Windows 10+) and WaitOnAddress from
   // api-ms-win-core-synch-l1-2-0.dll (Windows 8+), so it cannot load on the

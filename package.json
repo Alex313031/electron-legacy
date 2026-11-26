@@ -1,12 +1,14 @@
 {
   "name": "electron",
-  "version": "44.10.2",
-  "description": "Electron for legacy Windows (7/8/8.1)",
+  "version": "44.11.5",
+  "description": "Electron for legacy Windows (XP/Vista/7/8/8.1)",
   "repository": "https://github.com/Alex313031/electron-legacy",
   "license": "MIT",
   "author": "Alex313031",
   "keywords": [
     "electron",
+    "windowsxp",
+    "windowsvista",
     "windows7",
     "windows8",
     "legacy"
@@ -27,6 +29,9 @@
     "index.js",
     "install.js"
   ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
   "dependencies": {
     "@electron/get": "^5.0.0",
     "@types/node": "^24.9.0",
