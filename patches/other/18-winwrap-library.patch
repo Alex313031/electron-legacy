@@ -70,10 +70,10 @@ index 3f29da4cf6..deacbac9fa 100644
 +  # can be consumed by projects other than this one.
 +  #
 +  # Pinned to a commit, not a branch, so the patch series alone reproduces a
-+  # build: this is winwrap 0.5.0. Bump it here, and WINWRAP_REV in
++  # build: this is winwrap 0.5.1. Bump it here, and WINWRAP_REV in
 +  # patches/node/build_node.sh with it, to take a newer one.
 +  'src/third_party/winwrap': {
-+      'url': 'https://github.com/Alex313031/winwrap.git' + '@' + '73a59911382a69c27db85c43452dc08b92a004fb',
++      'url': 'https://github.com/Alex313031/winwrap.git' + '@' + '0caa20cfe1d37caf0eb27a131d09ea2377b8ae38',
 +      'condition': 'checkout_win',
 +  },
 +

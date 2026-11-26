@@ -35,9 +35,9 @@ NODE_PATH="$SRC_PATH/node"
 # deps/winwrap is the layout winwrap.gyp documents.
 WINWRAP_URL="https://github.com/Alex313031/winwrap.git"
 # Pinned to a commit rather than following main, so a given checkout of this
-# repository always builds against the same winwrap: this is 0.5.0. Electron's
+# repository always builds against the same winwrap: this is 0.5.1. Electron's
 # pin is in patches/other/18-winwrap-library.patch; bump the two together.
-WINWRAP_REV="73a59911382a69c27db85c43452dc08b92a004fb"
+WINWRAP_REV="0caa20cfe1d37caf0eb27a131d09ea2377b8ae38"
 WINWRAP_PATH="$NODE_PATH/deps/winwrap"
 
 # Patch series to apply on top of the checkout
