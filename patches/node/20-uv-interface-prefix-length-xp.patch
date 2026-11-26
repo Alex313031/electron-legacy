@@ -20,10 +20,19 @@ short, past the end of the allocation. So this is a heap overflow that
 happened to surface as a spoiled string, and the netmasks it reported were
 never right either.
 
-Two changes. The structure carries its own Length, so the field is read only
-when the structure is long enough to contain it -- a question put to the data
-rather than to the Windows version. And when it is not there, the length is
-worked out from what an older Windows does provide, in uv__prefix_len_from_list():
+Two changes. The field is read only where it exists, and that is decided from
+the data rather than from the Windows version: an adapter structure longer
+than XP's is Vista's. Not from the unicast structure's own Length, which was
+the first attempt and is useless on ia32 -- the field sits in what is padding
+in the XP layout, so both layouts are 48 bytes and the test always passed. A
+32-bit build on XP went on reading the padding byte and reported prefixes of
+/0, /89 and /116; the x64 build, where the two sizes differ, was correct.
+IP_ADAPTER_ADDRESSES has no such ambiguity on either architecture: Vista's
+additions start with TransmitLinkSpeed at exactly the offset where XP's
+structure ends.
+
+And when the field is not there, the length is worked out from what an older
+Windows does provide, in uv__prefix_len_from_list():
 
   - for IPv4, the IP address table (GetIpAddrTable), which has a row for
     every address with its mask written out;
@@ -210,7 +219,7 @@ diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
  
    /* Fetch the size of the adapters reported by windows, and then get the list
     * itself. */
-@@ -878,11 +1024,32 @@
+@@ -878,11 +1024,42 @@
           unicast_address = unicast_address->Next) {
        struct sockaddr* sa;
        ULONG prefix_len;
@@ -220,17 +229,27 @@ diff --git a/deps/uv/src/win/util.c b/deps/uv/src/win/util.c
  
 -      prefix_len =
 -        ((IP_ADAPTER_UNICAST_ADDRESS_LH*) unicast_address)->OnLinkPrefixLength;
-+      /* OnLinkPrefixLength is Vista's. The structure states its own size, so
-+       * ask it whether the field is there rather than asking which Windows
-+       * this is. On XP it is not, and reading it anyway reads whatever follows
-+       * the structure -- which then went, unchecked, into the memset below
-+       * as a byte count, writing up to twelve bytes of 0xff past the end of
-+       * the netmask: into the next element, or after the last one into the
-+       * interface names, or with short enough names off the end of the
-+       * allocation. It showed as an interface called "????????????onnection". */
-+      if (unicast_address->Length >=
-+          FIELD_OFFSET(IP_ADAPTER_UNICAST_ADDRESS_LH, OnLinkPrefixLength) +
-+              sizeof(UINT8)) {
++      /* OnLinkPrefixLength is Vista's. On XP it is not there, and reading it
++       * anyway reads whatever follows the structure -- which then went,
++       * unchecked, into the memset below as a byte count, writing up to twelve
++       * bytes of 0xff past the end of the netmask: into the next element, or
++       * after the last one into the interface names, or with short enough
++       * names off the end of the allocation. It showed as an interface called
++       * "????????????onnection".
++       *
++       * Whether the field is there is asked of the data, not of the Windows
++       * version -- but of the adapter structure, not of this one, though this
++       * one has a Length too. On ia32 the field is the last byte before three
++       * of padding: the XP and Vista layouts are both 48 bytes, so a Length
++       * of 48 says nothing about which was filled in. The first form of this
++       * patch asked it anyway, and on 32-bit XP read the padding and reported
++       * prefixes of /0, /89 and /116. (On x64 the two happen to differ, 56
++       * against 64, which is why that build was right.) The adapter structure
++       * grew by more than its alignment: Vista's begins its additions with
++       * TransmitLinkSpeed at exactly the offset where XP's ends, on both
++       * architectures, so an adapter longer than that is Vista's. */
++      if (adapter->Length > FIELD_OFFSET(IP_ADAPTER_ADDRESSES_LH,
++                                         TransmitLinkSpeed)) {
 +        prefix_len =
 +          ((IP_ADAPTER_UNICAST_ADDRESS_LH*) unicast_address)->OnLinkPrefixLength;
 +      } else {
