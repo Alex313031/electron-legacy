@@ -1,0 +1,53 @@
+Title: Load an .ico whose 256px image Windows XP cannot decode
+Origin: electron-legacy (this repo)
+
+On Windows XP, creating a Tray (or anything else) from an ordinary .ico path
+failed:
+
+  Could not create the tray icon: Error: Failed to load image from path
+  'Z:\dlls\sample_app\src\imgs\icon.ico'
+
+The file is fine. It holds four images -- 16, 32 and 48 pixels as bitmaps, and
+256 pixels PNG-compressed, which is how every icon editor has written that
+size since Vista introduced the format. XP's icon loader predates it and
+cannot decode the entry.
+
+NativeImage's constructor for an .ico path builds its fallback image from
+GetHICON(256) and nothing else. On XP that LoadImage call fails, the image is
+left empty, and TryConvertNativeImage reports the path as unloadable -- though
+the sizes XP would actually have used, 16 for the tray and 32 for a caption,
+are sitting in the same file undamaged.
+
+So the constructor now tries 256, then 48, 32 and 16, and takes the first that
+loads. Nothing changes where 256 works: the loop stops at its first iteration.
+GetHICON already loads each requested size from the file separately, so the
+tray still gets its real 16-pixel image and not a scaled-down fallback.
+
+diff --git a/electron/shell/common/api/electron_api_native_image.cc b/electron/shell/common/api/electron_api_native_image.cc
+--- a/electron/shell/common/api/electron_api_native_image.cc
++++ b/electron/shell/common/api/electron_api_native_image.cc
+@@ -167,9 +167,22 @@
+     : hicon_path_(hicon_path), isolate_(isolate) {
+   EnsureSupportedScaleFactors();
+ 
+-  // Use the 256x256 icon as fallback icon.
++  // Use the 256x256 icon as fallback icon -- or, where that one cannot be
++  // had, the largest that can.
++  //
++  // The 256x256 image in a modern .ico is stored PNG-compressed, a form
++  // Windows Vista introduced. Windows XP cannot decode it, so LoadImage fails
++  // for that size there, and with an empty fallback image the whole path is
++  // reported as "Failed to load image from path" -- for an icon whose
++  // 16, 32 and 48 pixel images are perfectly loadable and are the ones a tray
++  // icon or a window caption would have used anyway. So try those before
++  // giving up. On a Windows that reads the PNG form the first attempt
++  // succeeds and the rest never run.
+   gfx::ImageSkia image_skia;
+-  electron::util::ReadImageSkiaFromICO(&image_skia, GetHICON(256));
++  for (const int size : {256, 48, 32, 16}) {
++    if (electron::util::ReadImageSkiaFromICO(&image_skia, GetHICON(size)))
++      break;
++  }
+   image_ = gfx::Image(image_skia);
+ 
+   UpdateExternalAllocatedMemoryUsage();

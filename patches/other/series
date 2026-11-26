@@ -20,3 +20,6 @@
 21-gpu-swiftshader-init-fallback.patch
 22-legacy-sandbox.patch
 23-pdfium-font-fallback.patch
+24-enable-jpeg-xl.patch
+25-ico-without-png-entry.patch
+26-no-media-foundation-before-vista.patch

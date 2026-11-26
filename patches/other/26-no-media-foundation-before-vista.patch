@@ -1,0 +1,54 @@
+Title: Do not look for Media Foundation where it cannot exist
+Origin: electron-legacy (this repo)
+
+Every process that initialises media on Windows XP or Server 2003 logged
+
+  ERROR:media\base\win\mf_initializer.cc:46] Failed to start Media
+  Foundation, accelerated media functionality may be disabled. If you're
+  using Windows N, see https://support.microsoft.com/... for information on
+  how to install the Media Feature Pack. Error: Could not load mf.dll: The
+  specified module could not be found. (0x7E)
+
+which is true and useless. Media Foundation was introduced in Windows Vista;
+on anything older mf.dll is not missing, it never existed, and there is no
+feature pack to install.
+
+LoadMediaFoundationLibraries() now returns false up front on a pre-Vista
+system, before trying to load anything. That is the value it returned there
+already, after failing, so nothing downstream changes: InitializeMediaFoundation()
+and PreSandboxMediaFoundationInitialization() report no Media Foundation and
+their callers fall back to software decoding, as they did. The session
+singleton is never constructed, since InitializeMediaFoundation() only reaches
+it when the libraries loaded.
+
+Vista is left alone. It has mf.dll, so the load is still attempted there and
+any failure still reported.
+
+diff --git a/media/base/win/mf_initializer.cc b/media/base/win/mf_initializer.cc
+--- a/media/base/win/mf_initializer.cc
++++ b/media/base/win/mf_initializer.cc
+@@ -17,6 +17,7 @@
+ #include "base/threading/thread_restrictions.h"
+ #include "base/win/delayload_helpers.h"
+ #include "base/win/scoped_handle.h"
++#include "base/win/windows_version.h"
+ #include "media/base/media_switches.h"
+ #include "media/base/win/media_foundation_package_runtime_locator.h"
+ 
+@@ -38,6 +39,16 @@
+ // sandbox initialization or it will always fail.
+ bool LoadMediaFoundationLibraries() {
+   static const bool kDidLoadSucceed = []() {
++    // Media Foundation arrived with Windows Vista. Before that there is no
++    // mf.dll to look for, so say no without trying: the attempt can only fail,
++    // and it fails loudly -- an ERROR in every process that asks, advising the
++    // user to install a Media Feature Pack that does not exist for their
++    // system. Callers already treat false as "no accelerated media", and
++    // playback goes through the software decoders as it did anyway.
++    if (base::win::GetVersion() < base::win::Version::VISTA) {
++      return false;
++    }
++
+     ScopedAllowBlockingForMediaFoundation allow_io_to_load_library;
+     for (const wchar_t* mfdll : {L"mf.dll", L"mfplat.dll"}) {
+       base::NativeLibraryLoadError error;
