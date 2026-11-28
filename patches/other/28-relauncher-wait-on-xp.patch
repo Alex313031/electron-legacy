@@ -1,0 +1,47 @@
+Title: Open the parent process with SYNCHRONIZE in the relauncher before Vista
+Origin: electron-legacy (this repo)
+
+app.relaunch() starts a helper process, electron.exe --type=relauncher, which
+waits for the application that started it to exit and then starts it again.
+To wait, it opens its parent with PROCESS_ALL_ACCESS.
+
+That constant is not one value. Before the Vista SDK it was
+STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFF; since, it ends in 0xFFFF,
+for the process rights Vista added. Windows XP refuses an access mask
+containing bits it does not define, so there OpenProcess fails with
+ERROR_ACCESS_DENIED. Nothing checks the handle: WaitForSingleObject is given
+null, fails immediately, and the helper goes straight on to start the
+application -- while the old instance is still shutting down, with its
+profile directory and whatever files it keeps still open.
+
+The wait needs SYNCHRONIZE and nothing else, so that is what is asked for
+before Vista. From Vista on the request is left as upstream has it.
+
+diff --git a/electron/shell/browser/relauncher_win.cc b/electron/shell/browser/relauncher_win.cc
+--- a/electron/shell/browser/relauncher_win.cc
++++ b/electron/shell/browser/relauncher_win.cc
+@@ -12,6 +12,7 @@
+ #include "base/strings/strcat_win.h"
+ #include "base/strings/string_number_conversions_win.h"
+ #include "base/win/scoped_handle.h"
++#include "base/win/windows_version.h"
+ #include "sandbox/win/src/nt_internals.h"
+ #include "sandbox/win/src/win_utils.h"
+ #include "shell/common/command_line_util_win.h"
+@@ -48,7 +49,15 @@
+     return nullptr;
+   }
+ 
+-  return ::OpenProcess(PROCESS_ALL_ACCESS, TRUE, ppid);
++  // Before Vista, SYNCHRONIZE, which is all the wait on this handle needs.
++  // PROCESS_ALL_ACCESS grew in the Vista SDK, and Windows XP refuses an access
++  // mask with bits it does not define: the open fails with
++  // ERROR_ACCESS_DENIED, the wait returns at once, and the application is
++  // started again while the old instance is still shutting down.
++  const DWORD access = base::win::GetVersion() < base::win::Version::VISTA
++                           ? SYNCHRONIZE
++                           : PROCESS_ALL_ACCESS;
++  return ::OpenProcess(access, TRUE, ppid);
+ }
+ 
+ }  // namespace

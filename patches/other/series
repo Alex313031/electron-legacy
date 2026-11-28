@@ -24,3 +24,4 @@
 25-ico-without-png-entry.patch
 26-no-media-foundation-before-vista.patch
 27-atl-thunk-emulation-before-vista.patch
+28-relauncher-wait-on-xp.patch
