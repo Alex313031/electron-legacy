@@ -8,9 +8,13 @@ See https://www.electronjs.org/docs/latest/development/build-instructions-window
  - [Git](https://git-scm.com/install/windows) (with Git Bash to run the build script on Windows)
  - [Visual Studio 2022](https://aka.ms/vs/17/release/vs_community.exe) or [2026](https://visualstudio.microsoft.com/downloads/), with the 10.0.26100.0 Win SDK installed and [debugging tools installed](https://chromium.googlesource.com/chromium/src/+/main/docs/windows_build_instructions.md#visual-studio).
  - [NASM](https://www.nasm.us/)
- - [NodeJS](https://nodejs.org/en/download) 22.x or higher. One can also build NodeJS (*with Windows 7 support too!*) right here in this repo using [build_node.sh](../patches/node/build_node.sh).
+ - [NodeJS](https://nodejs.org/en/download) 22.x or higher. One can also build NodeJS (*with Windows XP/Vista/7 support too!*) using [build_node.sh](https://github.com/Alex313031/node-legacy/blob/main/build_node.sh) from [node-legacy](https://github.com/Alex313031/node-legacy), which is checked out here as the `patches/node` submodule.
 
 ## Compiling
+Clone with `--recurse-submodules`: the Node patches are a submodule, `patches/node`. If the clone
+was made without it, `build.sh` fetches the submodule itself the first time it applies patches, or
+run `git submodule update --init`.
+
 To make a release build and package it:
 
 ```bash

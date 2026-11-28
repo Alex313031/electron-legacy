@@ -13,8 +13,6 @@
    - defining `mksnapshot` and `v8_context_snapshot_generator` in the target toolchain (part of
      `patches/other/03`), without which a cross-OS build ships host binaries in `mksnapshot.zip`
  - Linux and macOS builds
- - Split `patches/node/` into its own repo and add it back as a submodule. Watch out that
-   `build.sh` would silently skip the node series if the submodule isn't checked out
  - `wow_helper.exe` is a prebuilt 64-bit binary restored by `patches/chromium/sandbox/0299` and
    now shipped by `patches/other/22`. It is the one file a 32-bit build needs on a 64-bit XP or
    Vista host, and nothing verifies it is present: a packaging change that drops it brings back a
@@ -63,13 +61,6 @@
    `if_indextoname`/`if_nametoindex` are `getaddrinfo.c`'s IPv6 scope-id path, and
    `SHGetKnownFolderPath` is the crash-dump folder fallback in `process.c` that runs only when a
    registry read fails. `Shell_NotifyIconGetRect` is worth knowing about while testing the tray
- - Decide whether winwrap should dispatch at runtime instead of replacing statically. YY-Thunks
-   resolves the real export with a cached `GetProcAddress` and falls back to its own
-   implementation, so one binary runs XP through Win11 and uses the real kernel32 where it exists.
-   That would also remove the need for a separate `--xp` build: today the Vista shell32 fix only
-   ships when `use_winwrap` is on. The catch is that per-function dispatch would bind Vista's
-   `AcquireSRWLock*` to the real kernel32 while `TryAcquireSRWLock*` falls back to ours -- the
-   mixed state `static_redirects.cc` warns about. The SRWLOCK family would have to resolve as a group
  - Keep the sandbox diagnostics in `patches/other/22-legacy-sandbox.patch`. Unlike the delay-load
    dialog that was dropped for the 44.11.3 release, they only replace a DLOG a release build
    discards, and a path that logs nothing at all, so they cost one ERROR line on a failure that

@@ -10,7 +10,7 @@
 set -u -o pipefail
 
 SCRIPTNAME=$(basename "$0")
-SCRIPTVER="1.4.0"
+SCRIPTVER="1.4.1"
 
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -31,6 +31,11 @@ ELECTRON_PATH="$SRC_PATH/electron"
 
 # Patch series to apply on top of the checkout
 PATCHES_PATH="$HERE/patches"
+
+# The node series is not this repository's own: patches/node is a submodule,
+# https://github.com/Alex313031/node-legacy, which is also a build of Node by
+# itself and keeps its patches one level down, beside its own script.
+NODE_SERIES="node/patches"
 
 # GN args per build config: <release|debug>_<x64|x86>.gn
 ARGS_PATH="$HERE/assets/args"
@@ -696,13 +701,16 @@ reset_sources() {
   # for what tools/reset_sources.py does instead is in its docstring.
   [ -d "$ELECTRON_PATH/.git" ] \
       || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
+  # The tool skips a series it cannot find, and a node series it skipped is
+  # node patches left applied in a tree then called stock.
+  ensure_node_patches
 
   VERBOSE=1 execute "Resetting $SRC_PATH to stock (v$ELECTRON_VERSION)" "Unable to reset the checkout" \
       py "$HERE/tools/reset_sources.py" \
       --patches "$PATCHES_PATH" \
       --series "chromium=$SRC_PATH" \
       --series "electron=$ELECTRON_PATH" \
-      --series "node=$SRC_PATH/third_party/electron_node" \
+      --series "$NODE_SERIES=$SRC_PATH/third_party/electron_node" \
       --series "other=$SRC_PATH"
 
   # Nothing of ours is applied now, whatever the stamp said.
@@ -943,15 +951,16 @@ apply_series() {
   # applied (reverse-applies cleanly), so this is safe to re-run.
   local name="$1"
   local dir="$2"
-  local series="$PATCHES_PATH/$name/series"
+  local from
+  from="$(series_dir "$name")"
+  local series="$from/series"
   local applied=0 skipped=0
   # Same leniency upstream's apply_patches.bat used.
   local flags=(--ignore-space-change --whitespace=nowarn)
 
-  if [ ! -f "$series" ]; then
-    log "${YEL} No patches/%s/series, skipping${c0}\n" "$name"
-    return 0
-  fi
+  # All four are expected. A missing one is a broken checkout of this
+  # repository, not a build with fewer patches.
+  [ -f "$series" ] || error_exit "No series file at $series"
   [ -d "$dir" ] || error_exit "Patch target '$dir' for $name/ doesn't exist; are sources downloaded?"
 
   log "${CYA} Applying %s patches in %s${c0}\n" "$name" "$dir"
@@ -959,8 +968,8 @@ apply_series() {
   while IFS= read -r p || [ -n "$p" ]; do
     p="${p%$'\r'}"
     [[ -z "$p" || "$p" == \#* ]] && continue
-    file="$PATCHES_PATH/$name/$p"
-    [ -f "$file" ] || error_exit "patches/$name/series lists '$p', which doesn't exist"
+    file="$from/$p"
+    [ -f "$file" ] || error_exit "$series lists '$p', which doesn't exist"
 
     if git -C "$dir" apply --check "${flags[@]}" "$file" >/dev/null 2>&1; then
       execute "" "Failed to apply $name/$p" git -C "$dir" apply "${flags[@]}" "$file"
@@ -982,6 +991,32 @@ apply_series() {
   log "${GRE} %s: %d applied, %d already applied${c0}\n" "$name" "$applied" "$skipped"
 }
 
+series_dir() {
+  # Where a series file and its patches are, for a series name.
+  case "$1" in
+    node) printf '%s\n' "$PATCHES_PATH/$NODE_SERIES" ;;
+    *) printf '%s\n' "$PATCHES_PATH/$1" ;;
+  esac
+}
+
+ensure_node_patches() {
+  # The node series lives in a submodule, and a clone made without
+  # --recurse-submodules has an empty directory where it should be. Fetch it
+  # rather than fail, and fail rather than go on: a missing series used to be
+  # skipped with a note, which here would build Electron with the Node fixes
+  # left out and then stamp the checkout as fully patched.
+  local series
+  series="$(series_dir node)/series"
+  [ -f "$series" ] && return 0
+  if git -C "$HERE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    execute "Fetching the node patches (the patches/node submodule)" \
+        "Unable to initialise the patches/node submodule" \
+        git -C "$HERE" submodule update --init patches/node
+  fi
+  [ -f "$series" ] \
+      || error_exit "No node patches in patches/node; run 'git submodule update --init' in $HERE"
+}
+
 patches_stamp() {
   printf '%s\n' "$ROOT_PATH/.patches-applied"
 }
@@ -992,14 +1027,16 @@ patches_digest() {
   local name p
   {
     for name in chromium electron node other; do
-      local series="$PATCHES_PATH/$name/series"
+      local dir
+      dir="$(series_dir "$name")"
+      local series="$dir/series"
       [ -f "$series" ] || continue
       printf '== %s\n' "$name"
       cat "$series"
       while IFS= read -r p || [ -n "$p" ]; do
         p="${p%$'\r'}"
         [[ -z "$p" || "$p" == \#* ]] && continue
-        [ -f "$PATCHES_PATH/$name/$p" ] && cat "$PATCHES_PATH/$name/$p"
+        [ -f "$dir/$p" ] && cat "$dir/$p"
       done < "$series"
     done
   } | { sha256sum 2>/dev/null || cksum; } | cut -d' ' -f1
@@ -1177,6 +1214,7 @@ sync_patched_deps() {
 
 apply_patches() {
   [ -d "$ELECTRON_PATH" ] || error_exit "No sources in $SRC_PATH, run '$SCRIPTNAME -d' first"
+  ensure_node_patches
 
   apply_series chromium "$SRC_PATH"
   apply_series electron "$ELECTRON_PATH"
