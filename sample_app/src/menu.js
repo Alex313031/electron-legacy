@@ -2,6 +2,7 @@ const { BrowserWindow, Menu, screen, shell } = require('electron');
 const path = require('path');
 const electronLog = require('electron-log');
 const { openAboutWindow } = require('./about.js'); // About window
+const { dialogTestMenu } = require('./dialogs.js'); // Message box tests
 const { openMainProcessDevTools } = require('./inspector.js'); // Main process debugger
 const { defaultUserAgent } = require('./useragent.js'); // Chrome-shaped UA for pop-outs
 
@@ -280,6 +281,12 @@ module.exports = (app, mainWindow, store) => {
           app.emit('create-tray');
           electronLog.info('Requested a tray icon');
         }
+      },
+      {
+        // One item per feature of dialog.showMessageBox(), which on Windows XP
+        // is winwrap's own dialog rather than the system's. See dialogs.js.
+        label: 'Dialog Tests',
+        submenu: dialogTestMenu()
       },
       { type: 'separator' },
       {
