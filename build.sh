@@ -15,7 +15,7 @@ SCRIPTVER="1.4.0"
 export HERE=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Electron release the patches in patches/ are made for.
-ELECTRON_VERSION="44.11.5"
+ELECTRON_VERSION="44.11.6"
 
 # The gclient root: .gclient and the state files beside it (.gclient_entries,
 # .cipd/, .gcs_entries), plus src/, dist/ and build.log. Kept in a subdirectory
