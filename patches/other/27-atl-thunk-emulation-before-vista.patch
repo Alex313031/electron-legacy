@@ -1,0 +1,62 @@
+Title: Keep ATL thunk emulation on in the browser process before Vista
+Origin: electron-legacy (this repo)
+
+On a Windows XP machine with hardware NX and Office 2003 installed, Electron
+died shortly after start with "Data Execution Prevention closed this
+program". The report was
+
+  EventType : BEX  P1 : electron.exe  P7 : 00105d08  P8 : c0000005  P9 : 00000008
+
+an execute fault at a heap address, called from user32's window procedure
+dispatch. The bytes there were
+
+  c7 44 24 04 00 5d 10 00   mov dword ptr [esp+4], 00105d00h
+  e9 fb f7 5a 13            jmp SKCHUI.DLL+5510h
+
+which is an ATL window thunk. SKCHUI.DLL is Office's handwriting input, a
+text service the language bar loads into every process that has a window.
+
+The browser process asks for DEP with MITIGATION_DEP_NO_ATL_THUNK, which
+turns off the kernel's emulation of exactly this sequence. That is the right
+choice where no such DLL exists any more. Before Vista they are common, so
+leave emulation on there: the kernel emulates only the known ATL thunk
+patterns, and everything else on the heap is still not executable.
+
+It never showed in a virtual machine because the guests ran without NX, where
+this mitigation does nothing.
+
+diff --git a/content/app/sandbox_helper_win.cc b/content/app/sandbox_helper_win.cc
+index 07ef39eb4c..100be807b8 100644
+--- a/content/app/sandbox_helper_win.cc
++++ b/content/app/sandbox_helper_win.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/public/app/sandbox_helper_win.h"
+ 
++#include "base/win/windows_version.h"
+ #include "sandbox/win/src/sandbox.h"
+ #include "sandbox/win/src/sandbox_factory.h"
+ 
+@@ -16,9 +17,19 @@ void InitializeSandboxInfo(sandbox::SandboxInterfaceInfo* info,
+     info->broker_services->SetStartingMitigations(starting_mitigations);
+ 
+     // Ensure the proper mitigations are enforced for the browser process.
+-    info->broker_services->RatchetDownSecurityMitigations(
+-        sandbox::MITIGATION_DEP | sandbox::MITIGATION_DEP_NO_ATL_THUNK |
+-        sandbox::MITIGATION_HARDEN_TOKEN_IL_POLICY);
++    sandbox::MitigationFlags browser_mitigations =
++        sandbox::MITIGATION_DEP | sandbox::MITIGATION_HARDEN_TOKEN_IL_POLICY;
++    // Before Vista, leave ATL thunk emulation on. Text services and input
++    // method DLLs of that era are loaded into every process that has a
++    // window, and some build their window procedures as ATL thunks on the
++    // heap -- Office 2003's handwriting input (SKCHUI.DLL) is one. With
++    // emulation off, the first message to such a window is a DEP violation
++    // that takes the browser down. The kernel only emulates the exact ATL
++    // thunk byte sequences, so everything else on the heap stays protected.
++    if (base::win::GetVersion() >= base::win::Version::VISTA) {
++      browser_mitigations |= sandbox::MITIGATION_DEP_NO_ATL_THUNK;
++    }
++    info->broker_services->RatchetDownSecurityMitigations(browser_mitigations);
+     // Note: these mitigations are "post-startup".  Some mitigations that need
+     // to be enabled sooner (e.g. MITIGATION_EXTENSION_POINT_DISABLE) are done
+     // so in Chrome_ELF.
