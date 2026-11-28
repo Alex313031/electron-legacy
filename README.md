@@ -1,4 +1,4 @@
-# <img src="assets/electron-logo.svg" width="38"> Electron for Legacy Windows <img src="assets/compatible-with-windows-7.png" width="38"/>
+# <img src="assets/electron-logo.svg" width="38"/> Electron for Legacy Windows <img src="assets/compatible-with-windows-7.png" width="38"/>
 
 This is a set of build scripts and [patches](./patches/README.md) to produce builds of up-to-date [Electron](https://electronjs.org/) supporting legacy
 versions of Windows (XP/Vista/7/8/8.1), with additional enhancements listed below. One binary runs on every
@@ -10,7 +10,6 @@ Windows NT release from XP to 11.
 See [Windows Vista and XP](./docs/BUILDING.md#windows-vista-and-xp).*
 
 ## Synopsis
-
 Existing Electron forks for Windows 7 were incomplete and hard to use, in addition I wanted:
 
  - Cross-compiling support: upstream Electron doesn't support cross building for Windows from Linux, unlike [Chromium](https://chromium.googlesource.com/chromium/src.git/+/HEAD/docs/win_cross.md). Some small patching allows this.
@@ -26,7 +25,6 @@ Release artifacts are served at [Releases](https://github.com/Alex313031/electro
 To add or use in an existing project, see [USAGE.md](./docs/USAGE.md).
 
 ## Building
-
 See [BUILDING.md](./docs/BUILDING.md).
 
 ## About
@@ -40,7 +38,6 @@ HEVC/AC3 software decoding support was added from code from Thorium, however the
 [ThaUnknown's Electron](https://github.com/ThaUnknown/electron-chromium-codecs) and [StaZhu's Chromium/Electron HEVC patches](https://github.com/StaZhu/enable-chromium-hevc-hardware-decoding).
 
 ## License
-
-The patches and code in this repo are licensed under the [BSD-3 License](./LICENSE.md).
+The patches and code in this repo are licensed under the [BSD-3 Clause License](./LICENSE.md).
 
 Electron itself uses the [MIT License](https://github.com/electron/electron/blob/main/LICENSE) and other libraries with their own respective licenses.
