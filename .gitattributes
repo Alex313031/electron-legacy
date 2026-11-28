@@ -15,6 +15,8 @@
 *.py text
 *.gn text
 *.gni text
+*.gyp text
+*.gypi text
 *.mak text eol=lf
 
 # Keep scripts correct

@@ -34,3 +34,6 @@ _gclient*/
 .gcs_entries
 .cipd/
 _bad_scm/
+
+# local workon stuff
+/temp
