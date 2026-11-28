@@ -25,3 +25,5 @@
 26-no-media-foundation-before-vista.patch
 27-atl-thunk-emulation-before-vista.patch
 28-relauncher-wait-on-xp.patch
+29-gles2-fallback-on-linux.patch
+30-no-sandbox-on-network-drive.patch

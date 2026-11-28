@@ -1,0 +1,42 @@
+Title: Keep hardware acceleration on Linux GPUs that only reach OpenGL ES 2.0
+Origin: electron-legacy (this repo)
+
+A GPU whose driver stops at OpenGL 2.1 -- Intel Ironlake and GM45, older
+Radeons and GeForces, a good many laptops from before 2011 -- gives ANGLE an
+ES 2.0 context and nothing higher. Chromium still ran on that in M144. It
+now asks for ES 3.0 when it collects GPU info at startup and, on Linux, takes
+a refusal as final: gpu::CollectGraphicsInfo() fails, GpuInit fails with it,
+and the GPU process is replaced by software rendering. --ignore-gpu-blocklist
+does not help, because this is not the blocklist.
+
+The decision is features::ShouldFallbackToSWIfGLES3NotSupported(). On Windows
+it is a feature that is off by default, with a comment that Direct3D 9 users
+are still on ES 2 -- which is why the D3D9 backend that patch 11 restores
+works at all. On ChromeOS it is a feature that is on. Everywhere else it is a
+hardcoded true.
+
+This gives Linux the Windows answer: false, so GLContextEGL is allowed to
+fall back from ES 3 to ES 2, as it still knows how to. Everything past that
+point already copes, since it is the path D3D9 takes: the compositor's and
+raster's contexts ask for ES 3 with fallback allowed, WebGL 1 asks for ES 2,
+and a WebGL 2 context fails to be created by itself ("ES3 is
+blocklisted/disabled/unsupported by driver") without taking the process down.
+
+Nothing changes on a GPU that has ES 3: the ES 3 context is created at the
+first attempt and the fallback is never consulted.
+
+diff --git a/ui/gl/gl_features.cc b/ui/gl/gl_features.cc
+--- a/ui/gl/gl_features.cc
++++ b/ui/gl/gl_features.cc
+@@ -283,6 +283,11 @@
+   return is_enabled;
+ #elif BUILDFLAG(IS_WIN)
+   return base::FeatureList::IsEnabled(kFallbackToSWIfGLES3NotSupported);
++#elif BUILDFLAG(IS_LINUX)
++  // electron-legacy: a GPU that stops at OpenGL 2.1 gives ANGLE an ES 2.0
++  // context and no more. Take it, as Windows does for Direct3D 9 above,
++  // and do not send the whole GPU process to software for want of ES 3.
++  return false;
+ #else   // BUILDFLAG(IS_CHROMEOS)
+   return true;
+ #endif  // BUILDFLAG(IS_CHROMEOS)

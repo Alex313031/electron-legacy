@@ -1,0 +1,69 @@
+Title: Run without the sandbox when started from a network drive
+Origin: electron-legacy (this repo)
+
+Started from a mapped share, a UNC path or a VirtualBox shared folder, Electron
+crashes on Vista and later and runs on XP. --no-sandbox makes it run, which is
+how the cause was confirmed.
+
+A sandboxed child is started at low integrity on a restricted token, and the
+network redirector does not serve that token the files the child is made of.
+XP has no integrity levels. Turning UAC off does not change this: the sandbox
+lowers the integrity level of its children itself.
+
+So the browser process looks at the volume its executable is on, and if that
+is a remote one, on Vista or later, adds --no-sandbox itself and logs that it
+did. In ElectronMainDelegate::BasicStartupComplete, beside the existing
+ELECTRON_DISABLE_SANDBOX check, which is early enough for the same reason that
+one is: nothing has asked whether there is a sandbox yet. The children are
+given the switch by the browser, as they are when it is typed.
+
+GetVolumePathNameW and not the first three characters of the path, so that a
+UNC path and a folder mounted from a share are both seen for what they are.
+
+This turns a security boundary off, for launches that otherwise do not start
+at all. It does nothing for an executable on a local disk.
+
+diff --git a/electron/shell/app/electron_main_delegate.cc b/electron/shell/app/electron_main_delegate.cc
+--- a/electron/shell/app/electron_main_delegate.cc
++++ b/electron/shell/app/electron_main_delegate.cc
+@@ -65,7 +65,10 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN)
++#include <windows.h>
++
+ #include "base/win/win_util.h"
++#include "base/win/windows_version.h"
+ #include "chrome/child/v8_crashpad_support_win.h"
+ #endif
+ 
+@@ -207,6 +210,29 @@
+   if (env->HasVar(kElectronDisableSandbox))
+     command_line->AppendSwitch(sandbox::policy::switches::kNoSandbox);
+ 
++#if BUILDFLAG(IS_WIN)
++  // electron-legacy: started from a network drive -- a mapped share, a UNC
++  // path, a VirtualBox shared folder -- every sandboxed child dies at launch
++  // on Vista and later. It runs at low integrity on a restricted token, and
++  // the network redirector will not serve that token the files the child is
++  // made of. XP has no integrity levels and is not affected. Run without the
++  // sandbox there, which is what the user would have to find out to do.
++  if (IsBrowserProcess() &&
++      !command_line->HasSwitch(sandbox::policy::switches::kNoSandbox) &&
++      base::win::GetVersion() >= base::win::Version::VISTA) {
++    base::FilePath exe;
++    wchar_t volume[MAX_PATH + 1] = {};
++    if (base::PathService::Get(base::FILE_EXE, &exe) &&
++        ::GetVolumePathNameW(exe.value().c_str(), volume, MAX_PATH) &&
++        ::GetDriveTypeW(volume) == DRIVE_REMOTE) {
++      LOG(WARNING) << "Running from a network drive (" << exe.value()
++                   << "): the sandbox is disabled, as its processes cannot "
++                      "start from one.";
++      command_line->AppendSwitch(sandbox::policy::switches::kNoSandbox);
++    }
++  }
++#endif  // BUILDFLAG(IS_WIN)
++
+   tracing_sampler_profiler_ =
+       tracing::TracingSamplerProfiler::CreateOnMainThread();
+ 
