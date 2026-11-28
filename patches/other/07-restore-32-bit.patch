@@ -50,6 +50,24 @@ branch: no win-x86.pgo.txt was ever published, so gn gen for x86 dies reading
 it. assets/args/release_x86.gn sets chrome_pgo_phase = 0 to opt out, which is
 the one way a 32-bit build is not simply a 64-bit build with another target_cpu.
 
+One line of the GN build is changed, for Linux and not for Windows: the root
+BUILD.gn asserts that target_cpu = "x86" is not used with target_os = "linux"
+in a Chromium build. That clause is dropped so a 32-bit Linux build can be
+generated. Windows already passed the check and still does.
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 0bd5d40ff7..dec8385c30 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1539,7 +1539,5 @@ if (!running_modularize) {
+   # TODO(cassew): Add more OS's that don't support x86.
+-  is_valid_x86_target =
+-      target_os != "ios" && target_os != "mac" &&
+-      (target_os != "linux" || use_libfuzzer || !build_with_chromium)
++  is_valid_x86_target = target_os != "ios" && target_os != "mac"
+ 
+   # Note: v8_target_cpu == arm allows using the V8 arm simulator on x86 for
+   # fuzzing.
 diff --git a/electron/script/lib/config.py b/electron/script/lib/config.py
 index a05fe1c..23fec07 100644
 --- a/electron/script/lib/config.py
