@@ -1,4 +1,4 @@
-Title: Restore the pre-Chrome-Refresh-2023 menu look
+Title: Restore the pre-Chrome-Refresh-2023 menu look and colors, add --native-colors
 Origin: electron-legacy (this repo), ported from Thorium
 Upstream-Source: electron-migrate/thorium-2024-ui-core.patch
 
@@ -113,6 +113,54 @@ reads as a tint rather than a selection on a flat menu bar. Both are set
 explicitly in submenu_button.cc, which also turns the hover highlight on:
 upstream passes highlight_on_hover = false, so hovering a menu bar item shows
 nothing until the press ripple, by which point the menu is already open.
+
+Colors
+------
+
+The metrics above put the menus back to their old size and shape. Their
+colors were still Chrome Refresh 2023's, as were those of everything else
+the views toolkit draws for an application: the menu bar, context and tray
+menus, tooltips, focus rings, the autofill popup. Material builds its surfaces from
+the system accent color, so all of these arrived tinted with it.
+
+Chromium's color provider is a list of mixers, and the one added last is asked
+first. Upstream adds the Material mixer after the core, native and UI mixers,
+which are the pre-Refresh recipes and are all still in the tree; so wherever
+both define a color, Material wins. The Material mixer cannot just be dropped,
+because more than half of what it sets is defined nowhere else. What it can be
+is moved to the front of those four, which is what this does, on Windows: the
+old recipes answer for every color they define, and Material fills in the
+rest. This is the arrangement Thorium uses.
+
+That changes every color Material used to override, not only the menu ones:
+the primary background and foreground, secondary text, icons, separators,
+buttons, text fields, focus rings. Menus are white with near-black text and a
+grey selection, in light mode, and Chromium's dark grey in dark mode.
+
+--native-colors goes further, for an application that wants the user's own
+Windows theme instead of Chromium's fixed palette. With it, in light mode:
+
+  menu background             COLOR_MENU
+  menu bar background         COLOR_MENUBAR where menus are flat, else COLOR_MENU
+  menu text, icons, arrows    COLOR_MENUTEXT
+  disabled items              COLOR_GRAYTEXT
+  selected item               COLOR_MENUHILIGHT where menus are flat, else
+                              COLOR_HIGHLIGHT; text in COLOR_HIGHLIGHTTEXT
+  menu border and separators  COLOR_BTNSHADOW
+  tooltips                    COLOR_INFOBK and COLOR_INFOTEXT
+
+The menu bar needs code of its own because Electron draws it with the menu
+background color, and Windows has a separate one for the bar: under the
+Windows XP theme a drop-down menu is white and the bar is the window's beige.
+
+In dark mode the switch does nothing. Windows has no dark set of system
+colors, and a light menu on a dark window is worse than Chromium's dark one.
+
+High contrast is unchanged: AddNativeUiColorMixer() already maps everything to
+the system colors there, and still does.
+
+The Chrome-specific mixers (chrome/browser/ui/color) are not touched. Electron
+uses them only for the picture-in-picture window and the eye dropper.
 
 diff --git a/ui/views/controls/menu/menu_config.cc b/ui/views/controls/menu/menu_config.cc
 index a711c503287a7..0370f0e84fbfe 100644
@@ -305,3 +353,173 @@ index fdcdd3b1c8..d9a6a82646 100644
  }
  
  SubmenuButton::~SubmenuButton() = default;
+diff --git a/ui/color/color_mixers.cc b/ui/color/color_mixers.cc
+--- a/ui/color/color_mixers.cc
++++ b/ui/color/color_mixers.cc
+@@ -28,10 +28,27 @@
+ #if BUILDFLAG(IS_ANDROID)
+   AddSysColorMixerAndroid(provider, key);
+ #endif
++#if BUILDFLAG(IS_WIN)
++  // The Material mixer first, where upstream has it last of these four. A
++  // mixer added later is asked first, so this way round the recipes from
++  // before Chrome Refresh 2023 -- the core, native and UI mixers below, which
++  // upstream still carries -- answer for every color they define, and
++  // Material answers only for the ones it alone defines. Those are more than
++  // half of what it sets, which is why it is moved and not removed.
++  //
++  // What that changes is everything Material used to override: menus, focus
++  // rings, buttons, text fields, and the primary background and foreground
++  // most of the rest derive from. Material builds its surfaces from the
++  // system accent color, so they arrived tinted with it; these are the fixed
++  // white, grey and near-black Chromium had before.
++  AddMaterialUiColorMixer(provider, key);
++#endif
+   AddCoreDefaultColorMixer(provider, key);
+   AddNativeCoreColorMixer(provider, key);
+   AddUiColorMixer(provider, key);
++#if !BUILDFLAG(IS_WIN)
+   AddMaterialUiColorMixer(provider, key);
++#endif
+   if (IsFluentScrollbarEnabled()) {
+     // This must come after the UI and before the native UI mixers to ensure
+     // leaf node colors are overridden with the Fluent recipes but that high
+diff --git a/ui/color/win/native_color_mixers_win.cc b/ui/color/win/native_color_mixers_win.cc
+--- a/ui/color/win/native_color_mixers_win.cc
++++ b/ui/color/win/native_color_mixers_win.cc
+@@ -133,9 +133,60 @@
+   }
+ }
+ 
++namespace {
++
++// With this switch the menus and tooltips take the user's Windows colors.
++// Without it they keep Chromium's own, which in this tree are the ones from
++// before Chrome Refresh 2023: see AddColorMixers() in ui/color/color_mixers.cc.
++constexpr char kNativeColorsSwitch[] = "native-colors";
++
++// --native-colors: what the user's Windows theme says a menu and a tooltip
++// look like, read from the system colors.
++//
++// Only for a light application. Windows has no dark set of these, so a dark
++// one keeps Chromium's colors rather than getting a light menu on a dark
++// window.
++void AddNativeMenuColorMixer(ColorProvider* provider,
++                             const ColorProviderKey& key) {
++  if (key.color_mode == ColorProviderKey::ColorMode::kDark ||
++      !base::CommandLine::ForCurrentProcess()->HasSwitch(kNativeColorsSwitch)) {
++    return;
++  }
++  ColorMixer& mixer = provider->AddMixer();
++
++  const auto sys_color = [](int color) {
++    return skia::COLORREFToSkColor(::GetSysColor(color));
++  };
++  // With flat menus, which is the Windows XP style and everything since, the
++  // selected item is COLOR_MENUHILIGHT. Without, the classic 3D menu, it is
++  // the same COLOR_HIGHLIGHT as a selection anywhere else.
++  BOOL flat_menus = FALSE;
++  ::SystemParametersInfo(SPI_GETFLATMENU, 0, &flat_menus, 0);
++  const SkColor menu_text = sys_color(COLOR_MENUTEXT);
++  const SkColor selection =
++      sys_color(flat_menus ? COLOR_MENUHILIGHT : COLOR_HIGHLIGHT);
++
++  mixer[kColorMenuBackground] = {sys_color(COLOR_MENU)};
++  mixer[kColorMenuBorder] = {kColorNativeBtnShadow};
++  mixer[kColorMenuSeparator] = {kColorNativeBtnShadow};
++  mixer[kColorMenuDropmarker] = {menu_text};
++  mixer[kColorMenuIcon] = {menu_text};
++  mixer[kColorMenuItemForeground] = {menu_text};
++  mixer[kColorMenuItemForegroundSecondary] = {menu_text};
++  mixer[kColorMenuItemForegroundDisabled] = {kColorNativeGrayText};
++  mixer[kColorMenuItemBackgroundSelected] = {selection};
++  mixer[kColorMenuSelectionBackground] = {selection};
++  mixer[kColorMenuItemForegroundSelected] = {kColorNativeHighlightText};
++  mixer[kColorTooltipBackground] = {sys_color(COLOR_INFOBK)};
++  mixer[kColorTooltipForeground] = {sys_color(COLOR_INFOTEXT)};
++}
++
++}  // namespace
++
+ void AddNativeUiColorMixer(ColorProvider* provider,
+                            const ColorProviderKey& key) {
+   if (key.contrast_mode == ColorProviderKey::ContrastMode::kNormal) {
++    AddNativeMenuColorMixer(provider, key);
+     return;
+   }
+ 
+diff --git a/electron/shell/browser/ui/views/menu_bar.cc b/electron/shell/browser/ui/views/menu_bar.cc
+--- a/electron/shell/browser/ui/views/menu_bar.cc
++++ b/electron/shell/browser/ui/views/menu_bar.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <memory>
+ 
++#include "base/command_line.h"
+ #include "base/logging.h"
+ #include "shell/browser/native_window.h"
+ #include "shell/browser/ui/views/submenu_button.h"
+@@ -211,11 +212,42 @@
+     const views::ViewHierarchyChangedDetails& details) {
+   views::AccessiblePaneView::ViewHierarchyChanged(details);
+ #if BUILDFLAG(IS_WIN)
++  UpdateNativeBackground();
+   background_color_ =
+       GetBackground()->color().ResolveToSkColor(root_view_->GetColorProvider());
+ #endif
+ }
+ 
++#if BUILDFLAG(IS_WIN)
++// With --native-colors, the menu bar's own system color. Windows has two
++// for menus: COLOR_MENU is a menu that drops down, and COLOR_MENUBAR is the
++// bar, where menus are flat. Under the Windows XP theme those are white and
++// the window's beige, and a bar drawn in the first is a white stripe across
++// the top of every window.
++//
++// There is one color id for both here, ui::kColorMenuBackground, which the
++// mixer in ui/color/win/native_color_mixers_win.cc sets to COLOR_MENU. So
++// that is how this tells that the system colors are in use at all: the mixer
++// leaves a dark application alone, and then the bar is left alone too.
++void MenuBar::UpdateNativeBackground() {
++  static const bool native_colors =
++      base::CommandLine::ForCurrentProcess()->HasSwitch("native-colors");
++  const ui::ColorProvider* color_provider = root_view_->GetColorProvider();
++  if (!native_colors || !color_provider)
++    return;
++
++  BOOL flat_menus = FALSE;
++  ::SystemParametersInfo(SPI_GETFLATMENU, 0, &flat_menus, 0);
++  if (flat_menus && color_provider->GetColor(ui::kColorMenuBackground) ==
++                        GetSysSkColor(COLOR_MENU)) {
++    SetBackground(
++        views::CreateSolidBackground(GetSysSkColor(COLOR_MENUBAR)));
++  } else {
++    SetBackground(views::CreateSolidBackground(ui::kColorMenuBackground));
++  }
++}
++#endif
++
+ void MenuBar::RefreshColorCache(const ui::NativeTheme* theme) {
+   if (theme) {
+ #if BUILDFLAG(IS_LINUX)
+@@ -235,6 +267,7 @@
+           color_provider->GetColor(ui::kColorMenuItemForegroundDisabled);
+     }
+ #elif BUILDFLAG(IS_WIN)
++    UpdateNativeBackground();
+     background_color_ = GetBackground()->color().ResolveToSkColor(
+         root_view_->GetColorProvider());
+ #endif
+diff --git a/electron/shell/browser/ui/views/menu_bar.h b/electron/shell/browser/ui/views/menu_bar.h
+--- a/electron/shell/browser/ui/views/menu_bar.h
++++ b/electron/shell/browser/ui/views/menu_bar.h
+@@ -78,6 +78,9 @@
+   void RebuildChildren();
+   void UpdateViewColors();
+   void RefreshColorCache(const ui::NativeTheme* theme);
++#if BUILDFLAG(IS_WIN)
++  void UpdateNativeBackground();
++#endif
+   View* FindAccelChild(char16_t key);
+ 
+   SkColor background_color_;

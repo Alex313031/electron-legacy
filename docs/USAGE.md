@@ -43,3 +43,19 @@ ELECTRON_MIRROR=https://my.host/electron/ npx install-electron
 of a download. `ELECTRON_INSTALL_PLATFORM` and `ELECTRON_INSTALL_ARCH` (or
 `npm_config_platform` / `npm_config_arch`) fetch a build for another platform,
 which is what packaging tools set when they cross-package.
+
+### Menu colors: `--native-colors`
+On Windows, menus, the menu bar and tooltips use the fixed colors Chromium had before Chrome
+Refresh 2023: white menus with a grey selection in light mode, dark grey in dark mode. Upstream
+Electron tints them with the system accent color instead.
+
+To take the user's Windows theme colors, start the app with `--native-colors`, or set it before
+`ready`:
+
+```js
+app.commandLine.appendSwitch('native-colors');
+```
+
+Menus are then drawn in the system menu colors (`COLOR_MENU`, `COLOR_MENUTEXT`, `COLOR_MENUHILIGHT`
+and so on) and tooltips in the system tooltip colors. It only applies in light mode; a dark app
+keeps Chromium's dark menu.
