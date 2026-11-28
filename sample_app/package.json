@@ -3,7 +3,7 @@
   "appName": "Electron Legacy Test",
   "productName": "Electron Legacy Test",
   "applicationId": "com.alex313031.electron-legacy-sample",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A sample Electron app for demonstrating and testing Electron Legacy.",
   "author": "Alex313031",
   "license": "BSD-3-Clause",
@@ -42,7 +42,7 @@
   "devDependencies": {
     "@electron/asar": "4.3.1",
     "@eslint/js": "9.39.5",
-    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.11.5",
+    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.11.6",
     "electron-builder": "24.13.3",
     "eslint": "9.39.5",
     "globals": "14.0.0",
@@ -51,6 +51,6 @@
     "stylelint-config-standard": "39.0.1"
   },
   "resolutions": {
-    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.11.5"
+    "electron": "git+https://github.com/Alex313031/electron-legacy#v44.11.6"
   }
 }

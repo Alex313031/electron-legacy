@@ -89,7 +89,7 @@ covers the layout in more detail and how a version is added.
 
 ```ini
 runtime=electron
-target=44.11.5
+target=44.11.6
 disturl=https://thorium.rocks/electron-legacy/headers
 ```
 
@@ -97,7 +97,7 @@ or in the environment for one command, which is also how to build for the other 
 
 ```sh
 npm_config_runtime=electron \
-npm_config_target=44.11.5 \
+npm_config_target=44.11.6 \
 npm_config_arch=ia32 \
 npm_config_disturl=https://thorium.rocks/electron-legacy/headers \
 npm rebuild
@@ -110,7 +110,7 @@ asks this site for a directory it does not have.
 [`@electron/rebuild`](https://github.com/electron/rebuild) takes the same two values as flags:
 
 ```sh
-npx @electron/rebuild --version 44.11.5 --dist-url https://thorium.rocks/electron-legacy/headers
+npx @electron/rebuild --version 44.11.6 --dist-url https://thorium.rocks/electron-legacy/headers
 ```
 
 ### With electron-builder
