@@ -1,0 +1,3 @@
+[submodule "patches/node"]
+	path = patches/node
+	url = https://github.com/Alex313031/node-legacy
