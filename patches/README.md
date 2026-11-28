@@ -4,20 +4,31 @@
 |-------------|---------------------------------|--------------|
 | `chromium/` | `src/`                          | `chromium/series` |
 | `electron/` | `src/electron/`                 | `electron/series` |
-| `node/`     | `src/third_party/electron_node/` | `node/series` |
+| `node/patches/` | `src/third_party/electron_node/` | `node/patches/series` |
 | `other/`    | `src/`, after `chromium/`       | `other/series` |
 
-`node/` has two lists, because it serves two builds. `node/series` is what the
-Electron build applies to its own copy of Node, as in the table.
-`node/standalone_series` is what `node/build_node.sh` applies when building
-Node by itself: the same patches plus the ones for Node's own GYP build
-(`node.gyp`, `common.gypi`, `vcbuild.bat`). Those must stay out of `series` —
-Electron's configure step loads `node.gyp`, and the standalone winwrap
-dependency there names a `deps/winwrap/winwrap.gyp` that an Electron checkout
-does not have. A patch both builds need goes in both files.
+`node/` is not part of this repository. It is a git submodule,
+[node-legacy](https://github.com/Alex313031/node-legacy), which is also a
+build of Node by itself: its own `build_node.sh`, a smoke test, and the
+patches one level down in `node/patches/`. A clone made without
+`--recurse-submodules` has an empty `node/`; `git submodule update --init`
+fills it, and `build.sh` runs that itself when it finds the series missing.
 
-`chromium/`, `electron/` and `node/` are imported from upstream (mostly
-reverts of upstream changes that dropped Windows 7/8). `other/` is this repo's
+That directory has two lists, because it serves two builds. `series` is what
+the Electron build applies to its own copy of Node, as in the table.
+`standalone_series` is what `build_node.sh` applies when building Node by
+itself: the same patches plus the ones for Node's own GYP build (`node.gyp`,
+`common.gypi`, `vcbuild.bat`). Those must stay out of `series` — Electron's
+configure step loads `node.gyp`, and the standalone winwrap dependency there
+names a `deps/winwrap/winwrap.gyp` that an Electron checkout does not have. A
+patch both builds need goes in both files. See `node/patches/README.md`.
+
+A change to a node patch is a commit in node-legacy and then a second one
+here, moving the submodule to it. Until the second, this repository still
+builds with the old patches.
+
+`chromium/`, `electron/` and the first few of `node/patches/` are imported
+from upstream (mostly reverts of upstream changes that dropped Windows 7/8). `other/` is this repo's
 own work: anything that isn't an upstream revert (XP/Vista support,
 cross-building, SIMD builds, ...). It is flat and numbered by its own `series`.
 
@@ -36,7 +47,7 @@ global position in `chromium/series`, so order is visible from the file name
 alone. Most of these undo an upstream commit that dropped Windows 7/8 support,
 so `series` runs newest commit first.
 
-`electron/`, `node/` and `other/` are flat and only a handful of patches each,
+`electron/`, `node/patches/` and `other/` are flat and only a handful of patches each,
 so they use a two-digit `NN-` prefix numbered from 1 within their own `series`
 rather than Chromium's four.
 
